@@ -134,9 +134,22 @@
       opacity: 0.92;
     }
 
+    .maps-entering #scene {
+      filter: blur(16px) saturate(0.34) brightness(0.18);
+      transform: scale(1.052);
+      opacity: 0.2;
+    }
+
     .maps-open .floating-tools {
       opacity: 0.14;
       filter: blur(4px);
+      pointer-events: none;
+    }
+
+    .maps-entering .floating-tools,
+    .maps-entering .constellation-btn {
+      opacity: 0;
+      filter: blur(6px);
       pointer-events: none;
     }
 
@@ -564,6 +577,8 @@
     let constellationItems = [];
     let hoveredMapId = null;
     let overlaySelectedMapId = null;
+    let overlayCreateState = null;
+    let overlayEnterState = null;
     let pendingDeleteMapId = null;
     let overlayPanning = false;
     let overlayPanLastX = 0;
@@ -600,6 +615,7 @@
 
     const MAPS_ZOOM_MIN = 0.08;
     const MAPS_ZOOM_MAX = 18;
+    const MAPS_ENTER_DURATION = 1280;
     const STAR_TYPE_WEIGHTS = [
       { type: "yellow", weight: 36 },
       { type: "orange", weight: 28 },
@@ -908,6 +924,14 @@
       return selectedMap ? selectedMap.id : null;
     }
 
+    function isOverlayEntering() {
+      return overlayEnterState !== null;
+    }
+
+    function isOverlayCreating() {
+      return overlayCreateState !== null;
+    }
+
     function getMapCenterNode(map) {
       return map.nodes.find(node => node.isCenter) || map.nodes[0] || null;
     }
@@ -927,11 +951,11 @@
       return getNodeDisplayTitle(centerNode) || `Mapa ${fallbackIndex + 1}`;
     }
 
-    function createDefaultMapState(mapId = allocateMapId()) {
+    function createDefaultMapState(mapId = allocateMapId(), starIdentityOverride = null) {
       let nextNodeId = 0;
       const mapNodes = [];
       const mapLinks = [];
-      const starIdentity = createRandomStarIdentity();
+      const starIdentity = starIdentityOverride || createRandomStarIdentity();
 
       function addMapNode({ x, y, parentId = null, level = 0, isCenter = false, label = "", note = "" }) {
         const id = ++nextNodeId;
@@ -1264,7 +1288,7 @@
     }
 
     function openDeleteConfirmation(mapId) {
-      if (maps.length <= 1) return false;
+      if (maps.length <= 1 || isOverlayEntering()) return false;
 
       const map = getMapById(mapId);
       if (!map) return false;
@@ -1293,7 +1317,7 @@
     }
 
     function deleteMapById(mapId) {
-      if (maps.length <= 1) return false;
+      if (maps.length <= 1 || isOverlayEntering()) return false;
 
       const map = getMapById(mapId);
       if (!map) return false;
@@ -1336,6 +1360,8 @@
       constellationItems = [];
       hoveredMapId = null;
       overlaySelectedMapId = null;
+      overlayCreateState = null;
+      overlayEnterState = null;
       overlayPanning = false;
       overlayPointerMoved = false;
       overlaySuppressClick = false;
@@ -1354,6 +1380,7 @@
       mapsOverlay.classList.remove("is-open");
       mapsOverlay.setAttribute("aria-hidden", "true");
       app.classList.remove("maps-open");
+      app.classList.remove("maps-entering");
       mapsCtx.clearRect(0, 0, width, height);
       app.style.cursor = "grab";
       updateMapsButton();
@@ -1374,6 +1401,8 @@
       constellationItems = [];
       hoveredMapId = null;
       overlaySelectedMapId = activeMapId;
+      overlayCreateState = null;
+      overlayEnterState = null;
       overlayPanning = false;
       overlayPointerMoved = false;
       overlaySuppressClick = false;
@@ -1389,6 +1418,7 @@
       mapsOverlay.classList.add("is-open");
       mapsOverlay.setAttribute("aria-hidden", "false");
       app.classList.add("maps-open");
+      app.classList.remove("maps-entering");
       app.style.cursor = "default";
       updateMapsButton();
       updateMapsCenterButton();
@@ -1417,25 +1447,108 @@
       closeMapsOverlay();
     }
 
-    function createNewMap() {
-      const confirmed = window.confirm(
-        "Se va a crear un mapa mental nuevo y vacio.\n\nTu mapa actual se guardara y podras volver a el desde la constelacion.\n\nQuieres continuar?"
-      );
-      if (!confirmed) return false;
+    function cancelOverlayEntryTransition() {
+      if (!overlayEnterState) return false;
+      overlayEnterState = null;
+      app.classList.remove("maps-entering");
+      updateMapsCenterButton();
+      return true;
+    }
+
+    function cancelOverlayCreateMode() {
+      if (!overlayCreateState) return false;
+      overlayCreateState = null;
+      clearMapsLabel();
+      return true;
+    }
+
+    function enterOverlayCreateMode() {
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null || isOverlayEntering()) return false;
+
+      if (isOverlayCreating()) {
+        cancelOverlayCreateMode();
+        return false;
+      }
+
+      overlayCreateState = {
+        starIdentity: createRandomStarIdentity(),
+        previewMapId: -(mapIdCounter + 1),
+        seed: Math.random() * 1000
+      };
+      hoveredMapId = null;
+      clearMapsLabel();
+      return true;
+    }
+
+    function createMapInConstellationAtWorldPoint(worldPoint, starIdentity = null) {
+      if (!worldPoint || !Number.isFinite(worldPoint.x) || !Number.isFinite(worldPoint.y)) return false;
 
       closeEditor(true);
       flushPendingSave();
       syncActiveMapInMemory();
 
-      const freshMap = createDefaultMapState();
-      freshMap.constellationPosition = findConstellationSpawnWorldPoint(freshMap);
+      const resolvedStarIdentity = starIdentity
+        ? { ...starIdentity }
+        : overlayCreateState && overlayCreateState.starIdentity
+          ? { ...overlayCreateState.starIdentity }
+          : createRandomStarIdentity();
+      const freshMap = createDefaultMapState(undefined, resolvedStarIdentity);
+      freshMap.constellationPosition = {
+        x: worldPoint.x,
+        y: worldPoint.y
+      };
       maps.push(freshMap);
       overlaySelectedMapId = freshMap.id;
-      hoveredMapId = null;
+      hoveredMapId = freshMap.id;
+      cancelOverlayCreateMode();
       saveState(false);
       updateMapsButton();
       updateMapsCenterButton();
       return true;
+    }
+
+    function startOverlayEntryTransition(mapId) {
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null || isOverlayEntering()) return false;
+
+      const map = getMapById(mapId);
+      if (!map) return false;
+
+      const orderedMaps = getOrderedMaps();
+      const mapIndex = orderedMaps.findIndex(candidate => candidate.id === mapId);
+      if (mapIndex < 0) return false;
+
+      const point = getConstellationMapWorldPoint(map, mapIndex, orderedMaps.length);
+      const visualItem = constellationItems.find(item => item.kind === "map" && item.mapId === mapId);
+      const targetX = visualItem ? visualItem.worldX + visualItem.driftX : point.x;
+      const targetY = visualItem ? visualItem.worldY + visualItem.driftY : point.y;
+      overlaySelectedMapId = mapId;
+      hoveredMapId = null;
+      overlayEnterState = {
+        mapId,
+        startedAt: null,
+        startX: mapsCamera.x,
+        startY: mapsCamera.y,
+        startZoom: mapsCamera.zoom,
+        targetX,
+        targetY,
+        targetZoom: clamp(Math.max(mapsCamera.zoom * 2.35, 1.9), MAPS_ZOOM_MIN, MAPS_ZOOM_MAX)
+      };
+      overlayPanning = false;
+      overlayPointerMoved = false;
+      overlaySuppressClick = false;
+      draggedOverlayMapId = null;
+      overlayMapDragOffsetX = 0;
+      overlayMapDragOffsetY = 0;
+      overlayDraggedMapDriftX = 0;
+      overlayDraggedMapDriftY = 0;
+      clearMapsLabel();
+      app.classList.add("maps-entering");
+      updateMapsCenterButton();
+      return true;
+    }
+
+    function createNewMap() {
+      return enterOverlayCreateMode();
     }
 
     function getNodeById(id) {
@@ -1653,18 +1766,44 @@
       }
     }
 
-    function drawBackground() {
-      const sky = ctx.createLinearGradient(0, 0, 0, height);
-      sky.addColorStop(0, "rgba(15, 26, 34, 1)");
-      sky.addColorStop(0.50, "rgba(10, 18, 24, 1)");
-      sky.addColorStop(1, "rgba(6, 11, 16, 1)");
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, width, height);
+    function drawUniverseBackdrop(renderCtx, viewCamera, time) {
+      renderCtx.fillStyle = "#000000";
+      renderCtx.fillRect(0, 0, width, height);
 
-      drawLiminalField();
-      drawPlanes();
-      drawAmbientGlow();
-      drawDust();
+      const fieldWidth = width + 180;
+      const fieldHeight = height + 180;
+
+      for (let i = 0; i < 96; i++) {
+        const seed = i + 1;
+        const parallax = 0.12 + hash01(seed * 2.6) * 0.16;
+        const driftX = Math.sin(time * 0.00012 + seed * 2.4) * 2.2;
+        const driftY = Math.cos(time * 0.0001 + seed * 1.7) * 2;
+        const glowRadius = 2.6 + hash01(seed * 5.1) * 5.6;
+        const coreRadius = 0.35 + hash01(seed * 6.8) * 1.25;
+        const glowAlpha = 0.025 + hash01(seed * 4.2) * 0.05;
+        const coreAlpha = 0.18 + hash01(seed * 9.4) * 0.32;
+        const baseX = (hash01(seed * 3.7) * fieldWidth * 3.4) - fieldWidth * 1.7;
+        const baseY = (hash01(seed * 8.9 + 14) * fieldHeight * 3) - fieldHeight * 1.5;
+        const starX = wrap(baseX - viewCamera.x * parallax, fieldWidth) - 90 + driftX;
+        const starY = wrap(baseY - viewCamera.y * parallax, fieldHeight) - 90 + driftY;
+
+        const glow = renderCtx.createRadialGradient(starX, starY, 0, starX, starY, glowRadius);
+        glow.addColorStop(0, `rgba(236, 244, 250, ${glowAlpha})`);
+        glow.addColorStop(1, "rgba(0,0,0,0)");
+        renderCtx.fillStyle = glow;
+        renderCtx.beginPath();
+        renderCtx.arc(starX, starY, glowRadius, 0, Math.PI * 2);
+        renderCtx.fill();
+
+        renderCtx.beginPath();
+        renderCtx.arc(starX, starY, coreRadius, 0, Math.PI * 2);
+        renderCtx.fillStyle = `rgba(245, 249, 252, ${coreAlpha})`;
+        renderCtx.fill();
+      }
+    }
+
+    function drawBackground(time = 0) {
+      drawUniverseBackdrop(ctx, camera, time);
     }
 
     function drawLiminalField() {
@@ -2154,7 +2293,7 @@
 
     function shouldShowCenterMapsButton() {
       const orderedMaps = getOrderedMaps();
-      if (!mapsOverlayOpen || pendingDeleteMapId !== null || !orderedMaps.length) return false;
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null || isOverlayEntering() || !orderedMaps.length) return false;
 
       const focusMapId = getConstellationFocusMapId();
       if (focusMapId === null) return false;
@@ -2232,39 +2371,7 @@
     }
 
     function drawConstellationBackdrop(time) {
-      mapsCtx.fillStyle = "#000000";
-      mapsCtx.fillRect(0, 0, width, height);
-
-      const fieldWidth = width + 180;
-      const fieldHeight = height + 180;
-
-      for (let i = 0; i < 96; i++) {
-        const seed = i + 1;
-        const parallax = 0.12 + hash01(seed * 2.6) * 0.16;
-        const driftX = Math.sin(time * 0.00012 + seed * 2.4) * 2.2;
-        const driftY = Math.cos(time * 0.0001 + seed * 1.7) * 2;
-        const glowRadius = 2.6 + hash01(seed * 5.1) * 5.6;
-        const coreRadius = 0.35 + hash01(seed * 6.8) * 1.25;
-        const glowAlpha = 0.025 + hash01(seed * 4.2) * 0.05;
-        const coreAlpha = 0.18 + hash01(seed * 9.4) * 0.32;
-        const baseX = (hash01(seed * 3.7) * fieldWidth * 3.4) - fieldWidth * 1.7;
-        const baseY = (hash01(seed * 8.9 + 14) * fieldHeight * 3) - fieldHeight * 1.5;
-        const starX = wrap(baseX - mapsCamera.x * parallax, fieldWidth) - 90 + driftX;
-        const starY = wrap(baseY - mapsCamera.y * parallax, fieldHeight) - 90 + driftY;
-
-        const glow = mapsCtx.createRadialGradient(starX, starY, 0, starX, starY, glowRadius);
-        glow.addColorStop(0, `rgba(236, 244, 250, ${glowAlpha})`);
-        glow.addColorStop(1, "rgba(0,0,0,0)");
-        mapsCtx.fillStyle = glow;
-        mapsCtx.beginPath();
-        mapsCtx.arc(starX, starY, glowRadius, 0, Math.PI * 2);
-        mapsCtx.fill();
-
-        mapsCtx.beginPath();
-        mapsCtx.arc(starX, starY, coreRadius, 0, Math.PI * 2);
-        mapsCtx.fillStyle = `rgba(245, 249, 252, ${coreAlpha})`;
-        mapsCtx.fill();
-      }
+      drawUniverseBackdrop(mapsCtx, mapsCamera, time);
     }
 
     function drawStarFlareArm(x, y, length, thickness, angle, color, alpha, whiteAlpha = 0) {
@@ -2476,7 +2583,63 @@
       };
     }
 
+    function getOverlayCreateStarProfile() {
+      if (!overlayCreateState) return null;
+      const identity = overlayCreateState.starIdentity;
+      return {
+        ...identity,
+        ...getStarTypeTemplate(identity.starType, identity.starVariant)
+      };
+    }
+
+    function getOverlayCreateGhostItem(target = null) {
+      if (!overlayCreateState || !overlayPointer.inside) return null;
+
+      const star = getOverlayCreateStarProfile();
+      if (!star) return null;
+
+      const summary = {
+        name: "Nuevo mapa",
+        nodeCount: 5,
+        branchCount: 4,
+        satelliteCount: 4,
+        visualRadius: clamp(14 + Math.sqrt(5) * 2.2 + 4 * 0.75, 17, 32),
+        seed: overlayCreateState.seed
+      };
+      const radius = clamp(
+        summary.visualRadius * star.starScale * getConstellationVisualScale(),
+        14,
+        star.starVariant === "giant" ? 78 : 58
+      );
+      const blocked = Boolean(target);
+      const worldPoint = screenToConstellationWorld(overlayPointer.x, overlayPointer.y);
+
+      return {
+        kind: "map",
+        mapId: overlayCreateState.previewMapId,
+        label: blocked ? "Busca un espacio vacio" : "Click para crear",
+        summary,
+        star,
+        x: overlayPointer.x,
+        y: overlayPointer.y,
+        worldX: worldPoint.x,
+        worldY: worldPoint.y,
+        driftX: 0,
+        driftY: 0,
+        radius,
+        hitRadius: radius + 12,
+        isActive: false,
+        isGhost: true,
+        isValid: !blocked
+      };
+    }
+
     function drawConstellationMap(item, time, hovered) {
+      mapsCtx.save();
+      if (item.isGhost) {
+        mapsCtx.globalAlpha *= item.isValid ? 0.64 : 0.26;
+      }
+
       const star = item.star;
       const emphasis = item.isActive ? 1.16 : hovered ? 1.12 : 1;
       const radius = item.radius * emphasis;
@@ -2639,6 +2802,18 @@
       );
       mapsCtx.lineWidth = 0.8;
       mapsCtx.stroke();
+
+      if (item.isGhost) {
+        mapsCtx.beginPath();
+        mapsCtx.arc(item.x, item.y, coreRadius + 8, 0, Math.PI * 2);
+        mapsCtx.strokeStyle = item.isValid
+          ? "rgba(225, 236, 244, 0.34)"
+          : "rgba(234, 168, 178, 0.28)";
+        mapsCtx.lineWidth = 1;
+        mapsCtx.stroke();
+      }
+
+      mapsCtx.restore();
     }
 
     function drawConstellationPlus(item, hovered) {
@@ -2761,21 +2936,54 @@
 
     function drawConstellation(time) {
       mapsCtx.clearRect(0, 0, width, height);
-      mapsCamera.x += (mapsCamera.targetX - mapsCamera.x) * 0.12;
-      mapsCamera.y += (mapsCamera.targetY - mapsCamera.y) * 0.12;
-      mapsCamera.zoom += (mapsCamera.targetZoom - mapsCamera.zoom) * 0.14;
+      let enterProgress = 0;
+      let enterFadeProgress = 0;
+
+      if (overlayEnterState) {
+        if (overlayEnterState.startedAt === null) {
+          overlayEnterState.startedAt = time;
+        }
+
+        const rawProgress = clamp((time - overlayEnterState.startedAt) / MAPS_ENTER_DURATION, 0, 1);
+        enterProgress = Math.pow(rawProgress, 1.55);
+        enterFadeProgress = clamp((rawProgress - 0.58) / 0.42, 0, 1);
+        mapsCamera.x = lerp(overlayEnterState.startX, overlayEnterState.targetX, enterProgress);
+        mapsCamera.y = lerp(overlayEnterState.startY, overlayEnterState.targetY, enterProgress);
+        mapsCamera.zoom = lerp(overlayEnterState.startZoom, overlayEnterState.targetZoom, enterProgress);
+        mapsCamera.targetX = mapsCamera.x;
+        mapsCamera.targetY = mapsCamera.y;
+        mapsCamera.targetZoom = mapsCamera.zoom;
+
+        if (rawProgress >= 1) {
+          const enteringMapId = overlayEnterState.mapId;
+          overlayEnterState = null;
+          app.classList.remove("maps-entering");
+          switchMapById(enteringMapId);
+          return;
+        }
+      }
+
+      if (!overlayEnterState) {
+        mapsCamera.x += (mapsCamera.targetX - mapsCamera.x) * 0.12;
+        mapsCamera.y += (mapsCamera.targetY - mapsCamera.y) * 0.12;
+        mapsCamera.zoom += (mapsCamera.targetZoom - mapsCamera.zoom) * 0.14;
+      }
       updateMapsCenterButton();
 
       const layout = buildConstellationState(time);
       constellationItems = layout.items;
 
-      const hoveredTarget = overlayPointer.inside
+      const hoveredTarget = overlayPointer.inside && !overlayEnterState
         ? resolveConstellationTarget(overlayPointer.x, overlayPointer.y)
         : null;
       const hoveredItem = hoveredTarget ? hoveredTarget.item : null;
       const hoveredDeleteControl = hoveredTarget && hoveredTarget.kind === "delete"
         ? hoveredTarget.control
         : null;
+      const selectedItem = overlaySelectedMapId !== null
+        ? constellationItems.find(item => item.kind === "map" && item.mapId === overlaySelectedMapId)
+        : null;
+      const createGhost = getOverlayCreateGhostItem(overlayCreateState ? hoveredTarget : null);
 
       hoveredMapId = hoveredItem && hoveredItem.kind === "map" ? hoveredItem.mapId : null;
 
@@ -2790,11 +2998,42 @@
         }
       }
 
-      if (!pendingDeleteMapId && hoveredItem && hoveredItem.kind === "map") {
+      if (!pendingDeleteMapId && !overlayEnterState && !overlayCreateState && hoveredItem && hoveredItem.kind === "map") {
         drawConstellationDeleteControl(
           getConstellationDeleteControl(hoveredItem),
           Boolean(hoveredDeleteControl)
         );
+      }
+
+      if (createGhost) {
+        drawConstellationMap(createGhost, time, false);
+      }
+
+      if (overlayEnterState && selectedItem && selectedItem.kind === "map") {
+        mapsCtx.fillStyle = `rgba(2, 4, 8, ${0.12 + enterFadeProgress * 0.56})`;
+        mapsCtx.fillRect(0, 0, width, height);
+
+        mapsCtx.save();
+        mapsCtx.globalCompositeOperation = "lighter";
+        const enterGlowRadius = selectedItem.radius * (4.8 + enterProgress * 2.8);
+        const enterGlow = mapsCtx.createRadialGradient(
+          selectedItem.x,
+          selectedItem.y,
+          0,
+          selectedItem.x,
+          selectedItem.y,
+          enterGlowRadius
+        );
+        enterGlow.addColorStop(0, rgba(selectedItem.star.haloColor, 0.16 + enterFadeProgress * 0.18));
+        enterGlow.addColorStop(0.26, rgba(selectedItem.star.haloColor, 0.08 + enterFadeProgress * 0.1));
+        enterGlow.addColorStop(0.68, "rgba(0,0,0,0)");
+        mapsCtx.fillStyle = enterGlow;
+        mapsCtx.beginPath();
+        mapsCtx.arc(selectedItem.x, selectedItem.y, enterGlowRadius, 0, Math.PI * 2);
+        mapsCtx.fill();
+        mapsCtx.restore();
+
+        drawConstellationMap(selectedItem, time, false);
       }
 
       if (pendingDeleteMapId !== null) {
@@ -2805,20 +3044,28 @@
       }
 
       updateMapsLabel(
-        hoveredTarget && hoveredTarget.kind === "delete"
-          ? hoveredTarget.item
-          : hoveredItem
+        createGhost
+          ? createGhost
+          : hoveredTarget && hoveredTarget.kind === "delete"
+            ? hoveredTarget.item
+            : hoveredItem || selectedItem
       );
       mapsOverlay.style.cursor = (overlayPanning || draggedOverlayMapId !== null)
         ? "grabbing"
-        : hoveredTarget
+        : overlayCreateState
+          ? createGhost && createGhost.isValid
+            ? "copy"
+            : "not-allowed"
+        : overlayEnterState
+          ? "default"
+          : hoveredTarget
           ? "pointer"
           : "default";
     }
 
     function render(time) {
       ctx.clearRect(0, 0, width, height);
-      drawBackground();
+      drawBackground(time);
       updateNodes();
       drawLinks();
 
@@ -3108,7 +3355,7 @@
     });
 
     mapsOverlay.addEventListener("mousemove", (e) => {
-      if (!mapsOverlayOpen) return;
+      if (!mapsOverlayOpen || isOverlayEntering()) return;
 
       const { x, y } = pointerPosition(e, mapsOverlay);
       overlayPointer.x = x;
@@ -3144,7 +3391,7 @@
     });
 
     mapsOverlay.addEventListener("wheel", (e) => {
-      if (!mapsOverlayOpen || pendingDeleteMapId !== null) return;
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null || isOverlayEntering()) return;
 
       e.preventDefault();
 
@@ -3169,12 +3416,16 @@
     }, { passive: false });
 
     mapsOverlay.addEventListener("mousedown", (e) => {
-      if (!mapsOverlayOpen || pendingDeleteMapId !== null) return;
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null || isOverlayEntering()) return;
 
       const { x, y } = pointerPosition(e, mapsOverlay);
       overlayPointer.x = x;
       overlayPointer.y = y;
       overlayPointer.inside = true;
+
+      if (isOverlayCreating()) {
+        return;
+      }
 
       const target = resolveConstellationTarget(x, y);
       if (target) {
@@ -3240,6 +3491,7 @@
 
     centerMapsBtn.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (isOverlayEntering()) return;
       overlayPanning = false;
       overlayPointerMoved = false;
       overlaySuppressClick = false;
@@ -3257,7 +3509,7 @@
     });
 
     mapsOverlay.addEventListener("click", (e) => {
-      if (!mapsOverlayOpen) return;
+      if (!mapsOverlayOpen || isOverlayEntering()) return;
 
       if (overlaySuppressClick) {
         overlaySuppressClick = false;
@@ -3271,6 +3523,21 @@
 
       const { x, y } = pointerPosition(e, mapsOverlay);
       const target = resolveConstellationTarget(x, y);
+
+      if (isOverlayCreating()) {
+        if (!target) {
+          createMapInConstellationAtWorldPoint(screenToConstellationWorld(x, y));
+          return;
+        }
+
+        if (target.kind === "new") {
+          cancelOverlayCreateMode();
+          return;
+        }
+
+        cancelOverlayCreateMode();
+        return;
+      }
 
       if (!target) {
         overlaySelectedMapId = null;
@@ -3290,7 +3557,30 @@
         return;
       }
 
-      switchMapById(target.item.mapId);
+      if (overlaySelectedMapId === target.item.mapId) {
+        startOverlayEntryTransition(target.item.mapId);
+        return;
+      }
+
+      overlaySelectedMapId = target.item.mapId;
+      hoveredMapId = target.item.mapId;
+      updateMapsCenterButton();
+    });
+
+    mapsOverlay.addEventListener("dblclick", (e) => {
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null || isOverlayEntering() || isOverlayCreating()) return;
+
+      const { x, y } = pointerPosition(e, mapsOverlay);
+      const target = resolveConstellationTarget(x, y);
+      if (target) return;
+
+      createMapInConstellationAtWorldPoint(screenToConstellationWorld(x, y));
+    });
+
+    mapsOverlay.addEventListener("contextmenu", (e) => {
+      if (!mapsOverlayOpen || !isOverlayCreating()) return;
+      e.preventDefault();
+      cancelOverlayCreateMode();
     });
 
     mapsConfirmPanel.addEventListener("click", (e) => {
@@ -3356,9 +3646,27 @@
     });
 
     window.addEventListener("keydown", (e) => {
-      if (!mapsOverlayOpen || e.key !== "Escape") return;
+      if (!mapsOverlayOpen) return;
+
+      if (e.key === "Enter" && pendingDeleteMapId === null && !isOverlayEntering() && !isOverlayCreating() && overlaySelectedMapId !== null) {
+        e.preventDefault();
+        startOverlayEntryTransition(overlaySelectedMapId);
+        return;
+      }
+
+      if (e.key !== "Escape") return;
 
       e.preventDefault();
+
+      if (isOverlayEntering()) {
+        cancelOverlayEntryTransition();
+        return;
+      }
+
+      if (isOverlayCreating()) {
+        cancelOverlayCreateMode();
+        return;
+      }
 
       if (pendingDeleteMapId !== null) {
         closeDeleteConfirmation();
