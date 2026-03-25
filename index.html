@@ -202,6 +202,60 @@
       display: block;
     }
 
+    .maps-center-btn {
+      position: absolute;
+      right: 20px;
+      bottom: 20px;
+      z-index: 2;
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      border: 1px solid rgba(210, 228, 240, 0.1);
+      background: rgba(7, 12, 18, 0.48);
+      box-shadow:
+        0 12px 24px rgba(0, 0, 0, 0.18),
+        inset 0 1px 0 rgba(255,255,255,0.03);
+      backdrop-filter: blur(12px);
+      opacity: 0;
+      transform: translateY(8px) scale(0.92);
+      transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+      pointer-events: none;
+      cursor: pointer;
+    }
+
+    .maps-center-btn.is-visible {
+      opacity: 0.82;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+
+    .maps-center-btn:hover {
+      background: rgba(11, 18, 26, 0.72);
+      border-color: rgba(220, 235, 245, 0.16);
+    }
+
+    .maps-center-btn::before,
+    .maps-center-btn::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      border-radius: 999px;
+    }
+
+    .maps-center-btn::before {
+      width: 14px;
+      height: 14px;
+      border: 1px solid rgba(234, 243, 248, 0.56);
+    }
+
+    .maps-center-btn::after {
+      width: 3px;
+      height: 3px;
+      background: rgba(244, 249, 252, 0.8);
+      box-shadow: 0 0 10px rgba(245, 249, 252, 0.18);
+    }
+
     .maps-confirm {
       position: absolute;
       inset: 0;
@@ -421,6 +475,7 @@
     <div id="mapsOverlay" class="maps-overlay" aria-hidden="true">
       <canvas id="mapsScene"></canvas>
       <div id="mapsLabel" class="maps-label" aria-hidden="true"></div>
+      <button id="centerMapsBtn" class="maps-center-btn" type="button" aria-label="Centrar" title="Centrar"></button>
       <div id="mapsConfirm" class="maps-confirm" aria-hidden="true">
         <div id="mapsConfirmPanel" class="maps-confirm-panel" role="dialog" aria-modal="true" aria-labelledby="mapsConfirmName">
           <div class="maps-confirm-kicker">Borrar mapa</div>
@@ -453,7 +508,7 @@
     const STORAGE_KEY = "sobrio-tree-state-v3";
     const LEGACY_MULTI_STORAGE_KEY = "sobrio-tree-state-v2";
     const LEGACY_STORAGE_KEY = "sobrio-tree-state-v1";
-    const STORAGE_VERSION = 4;
+    const STORAGE_VERSION = 6;
 
     const canvas = document.getElementById("scene");
     const ctx = canvas.getContext("2d");
@@ -466,6 +521,7 @@
     const openMapsBtn = document.getElementById("openMapsBtn");
     const mapsOverlay = document.getElementById("mapsOverlay");
     const mapsLabel = document.getElementById("mapsLabel");
+    const centerMapsBtn = document.getElementById("centerMapsBtn");
     const mapsConfirm = document.getElementById("mapsConfirm");
     const mapsConfirmPanel = document.getElementById("mapsConfirmPanel");
     const mapsConfirmName = document.getElementById("mapsConfirmName");
@@ -508,6 +564,16 @@
     let constellationItems = [];
     let hoveredMapId = null;
     let pendingDeleteMapId = null;
+    let overlayPanning = false;
+    let overlayPanLastX = 0;
+    let overlayPanLastY = 0;
+    let overlayPointerMoved = false;
+    let overlaySuppressClick = false;
+    let draggedOverlayMapId = null;
+    let overlayMapDragOffsetX = 0;
+    let overlayMapDragOffsetY = 0;
+    let overlayDraggedMapDriftX = 0;
+    let overlayDraggedMapDriftY = 0;
 
     const overlayPointer = {
       x: 0,
@@ -521,6 +587,18 @@
       targetX: 0,
       targetY: 0
     };
+
+    const mapsCamera = {
+      x: 0,
+      y: 0,
+      targetX: 0,
+      targetY: 0,
+      zoom: 1,
+      targetZoom: 1
+    };
+
+    const MAPS_ZOOM_MIN = 0.08;
+    const MAPS_ZOOM_MAX = 18;
 
     function resize() {
       width = window.innerWidth;
@@ -547,6 +625,7 @@
           maps = [freshMap];
           activeMapId = freshMap.id;
           applyMapState(freshMap);
+          applyMapsViewState(null);
           updateMapsButton();
           saveState(false);
         }
@@ -701,6 +780,7 @@
         id: mapId,
         nodeIdCounter: nextNodeId,
         selectedNodeId: center.id,
+        constellationPosition: null,
         camera: {
           x: width / 2,
           y: height / 2,
@@ -768,6 +848,7 @@
         selectedNodeId: validNodeIds.has(rawMap && rawMap.selectedNodeId)
           ? rawMap.selectedNodeId
           : sanitizedNodes[0].id,
+        constellationPosition: sanitizeConstellationPosition(rawMap && rawMap.constellationPosition),
         camera: {
           x: rawMap && rawMap.camera ? rawMap.camera.x ?? width / 2 : width / 2,
           y: rawMap && rawMap.camera ? rawMap.camera.y ?? height / 2 : height / 2,
@@ -780,10 +861,12 @@
     }
 
     function serializeCurrentMap(mapId = activeMapId) {
+      const existingMap = getMapById(mapId);
       return {
         id: mapId,
         nodeIdCounter,
         selectedNodeId,
+        constellationPosition: cloneConstellationPosition(existingMap && existingMap.constellationPosition),
         camera: {
           x: camera.x,
           y: camera.y,
@@ -811,6 +894,50 @@
       const index = getActiveMapIndex();
       if (index < 0) return;
       maps[index] = serializeCurrentMap(activeMapId);
+    }
+
+    function sanitizeConstellationPosition(rawPosition) {
+      if (!rawPosition) return null;
+      const x = Number(rawPosition.x);
+      const y = Number(rawPosition.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      return { x, y };
+    }
+
+    function cloneConstellationPosition(position) {
+      const sanitized = sanitizeConstellationPosition(position);
+      return sanitized ? { x: sanitized.x, y: sanitized.y } : null;
+    }
+
+    function sanitizeMapsViewState(rawView) {
+      if (!rawView) return null;
+
+      const x = Number(rawView.x);
+      const y = Number(rawView.y);
+      const zoom = clamp(Number(rawView.zoom), MAPS_ZOOM_MIN, MAPS_ZOOM_MAX);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoom)) return null;
+
+      const targetX = Number.isFinite(rawView.targetX) ? rawView.targetX : x;
+      const targetY = Number.isFinite(rawView.targetY) ? rawView.targetY : y;
+      const targetZoom = Number.isFinite(rawView.targetZoom)
+        ? clamp(rawView.targetZoom, MAPS_ZOOM_MIN, MAPS_ZOOM_MAX)
+        : zoom;
+
+      return {
+        x,
+        y,
+        targetX,
+        targetY,
+        zoom,
+        targetZoom
+      };
+    }
+
+    function setMapConstellationPosition(mapId, x, y) {
+      const map = getMapById(mapId);
+      if (!map || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+      map.constellationPosition = { x, y };
+      return true;
     }
 
     function applyMapState(state) {
@@ -968,6 +1095,7 @@
         const nextMap = getMapById(nextActiveId);
         if (nextMap) {
           applyMapState(nextMap);
+          centerMapsCameraOnActive(false);
         }
       }
 
@@ -979,22 +1107,33 @@
     function closeMapsOverlay() {
       if (!mapsOverlayOpen) return;
 
+      settleMapsCamera();
       mapsOverlayOpen = false;
       overlayPointer.inside = false;
       constellationItems = [];
       hoveredMapId = null;
+      overlayPanning = false;
+      overlayPointerMoved = false;
+      overlaySuppressClick = false;
+      draggedOverlayMapId = null;
+      overlayMapDragOffsetX = 0;
+      overlayMapDragOffsetY = 0;
+      overlayDraggedMapDriftX = 0;
+      overlayDraggedMapDriftY = 0;
       draggedNodeId = null;
       panning = false;
 
       closeDeleteConfirmation();
       clearMapsLabel();
       hideNoteCard();
+      centerMapsBtn.classList.remove("is-visible");
       mapsOverlay.classList.remove("is-open");
       mapsOverlay.setAttribute("aria-hidden", "true");
       app.classList.remove("maps-open");
       mapsCtx.clearRect(0, 0, width, height);
       app.style.cursor = "grab";
       updateMapsButton();
+      saveState(false);
     }
 
     function openMapsOverlay() {
@@ -1010,6 +1149,15 @@
       overlayPointer.inside = false;
       constellationItems = [];
       hoveredMapId = null;
+      overlayPanning = false;
+      overlayPointerMoved = false;
+      overlaySuppressClick = false;
+      draggedOverlayMapId = null;
+      overlayMapDragOffsetX = 0;
+      overlayMapDragOffsetY = 0;
+      overlayDraggedMapDriftX = 0;
+      overlayDraggedMapDriftY = 0;
+      settleMapsCamera();
       closeDeleteConfirmation();
       hideNoteCard();
 
@@ -1018,6 +1166,7 @@
       app.classList.add("maps-open");
       app.style.cursor = "default";
       updateMapsButton();
+      updateMapsCenterButton();
     }
 
     function toggleMapsOverlay() {
@@ -1175,6 +1324,11 @@
 
     function trimText(text, max) {
       return text.length > max ? text.slice(0, max - 3) + "..." : text;
+    }
+
+    function wrap(value, size) {
+      if (!size) return 0;
+      return ((value % size) + size) % size;
     }
 
     function getNodeNote(node) {
@@ -1528,11 +1682,7 @@
     function getConstellationDeleteControl(item) {
       if (!item || item.kind !== "map" || maps.length <= 1) return null;
 
-      const centerX = width * 0.5;
-      const centerY = height * 0.5;
-      const baseAngle = item.isActive
-        ? -Math.PI / 4
-        : Math.atan2(item.y - centerY, item.x - centerX) - 0.18;
+      const baseAngle = (-Math.PI / 4) + Math.sin(item.summary.seed * 7.4) * 0.12;
 
       const radius = clamp(item.radius * 0.34, 8, 10.5);
       const distance = item.radius + radius + 7;
@@ -1543,6 +1693,162 @@
         radius,
         hitRadius: radius + 7
       };
+    }
+
+    function getConstellationPlaneMetrics(totalMaps) {
+      const planeWidth = Math.max(width * 1.5, 420 + Math.max(0, totalMaps - 1) * 280);
+      const planeHeight = Math.max(height * 1.35, 900);
+      const padX = Math.max(160, Math.min(300, planeWidth * 0.12));
+      const laneOffsets = [
+        -planeHeight * 0.24,
+        0,
+        planeHeight * 0.24
+      ];
+
+      return {
+        planeWidth,
+        planeHeight,
+        padX,
+        laneOffsets
+      };
+    }
+
+    function getFallbackConstellationMapWorldPoint(map, index, totalMaps) {
+      const metrics = getConstellationPlaneMetrics(totalMaps);
+      const progress = totalMaps <= 1 ? 0.5 : index / (totalMaps - 1);
+      const laneIndex = Math.min(
+        metrics.laneOffsets.length - 1,
+        Math.floor(hash01(map.id * 4.7) * metrics.laneOffsets.length)
+      );
+      const spread = totalMaps <= 1
+        ? 0
+        : (hash01(map.id * 8.4) - 0.5) * Math.min((metrics.planeWidth - metrics.padX * 2) / totalMaps, 120);
+
+      return {
+        x: (-metrics.planeWidth * 0.5) + metrics.padX + ((metrics.planeWidth - metrics.padX * 2) * progress) + spread,
+        y: metrics.laneOffsets[laneIndex] + (hash01(map.id * 5.9) - 0.5) * Math.min(metrics.planeHeight * 0.15, 110)
+      };
+    }
+
+    function getConstellationMapWorldPoint(map, index, totalMaps) {
+      return cloneConstellationPosition(map && map.constellationPosition)
+        || getFallbackConstellationMapWorldPoint(map, index, totalMaps);
+    }
+
+    function getDefaultMapsViewState() {
+      const orderedMaps = getOrderedMaps();
+      if (!orderedMaps.length) {
+        return {
+          x: 0,
+          y: 0,
+          targetX: 0,
+          targetY: 0,
+          zoom: 1,
+          targetZoom: 1
+        };
+      }
+
+      const activeIndex = Math.max(0, orderedMaps.findIndex(map => map.id === activeMapId));
+      const point = getConstellationMapWorldPoint(orderedMaps[activeIndex], activeIndex, orderedMaps.length);
+
+      return {
+        x: point.x,
+        y: point.y,
+        targetX: point.x,
+        targetY: point.y,
+        zoom: 1,
+        targetZoom: 1
+      };
+    }
+
+    function applyMapsViewState(viewState) {
+      const nextView = sanitizeMapsViewState(viewState) || getDefaultMapsViewState();
+      mapsCamera.x = nextView.x;
+      mapsCamera.y = nextView.y;
+      mapsCamera.targetX = nextView.targetX;
+      mapsCamera.targetY = nextView.targetY;
+      mapsCamera.zoom = nextView.zoom;
+      mapsCamera.targetZoom = nextView.targetZoom;
+    }
+
+    function captureMapsViewState() {
+      const x = Number.isFinite(mapsCamera.targetX) ? mapsCamera.targetX : mapsCamera.x;
+      const y = Number.isFinite(mapsCamera.targetY) ? mapsCamera.targetY : mapsCamera.y;
+      const zoom = clamp(
+        Number.isFinite(mapsCamera.targetZoom) ? mapsCamera.targetZoom : mapsCamera.zoom,
+        MAPS_ZOOM_MIN,
+        MAPS_ZOOM_MAX
+      );
+
+      return {
+        x,
+        y,
+        targetX: x,
+        targetY: y,
+        zoom,
+        targetZoom: zoom
+      };
+    }
+
+    function settleMapsCamera() {
+      const settledView = captureMapsViewState();
+      applyMapsViewState(settledView);
+    }
+
+    function projectConstellationPoint(worldX, worldY) {
+      return {
+        x: (width * 0.5) + (worldX - mapsCamera.x) * mapsCamera.zoom,
+        y: (height * 0.5) + (worldY - mapsCamera.y) * mapsCamera.zoom
+      };
+    }
+
+    function screenToConstellationWorld(
+      screenX,
+      screenY,
+      zoom = mapsCamera.zoom,
+      cameraX = mapsCamera.x,
+      cameraY = mapsCamera.y
+    ) {
+      const safeZoom = Math.max(zoom, 0.0001);
+      return {
+        x: cameraX + (screenX - width * 0.5) / safeZoom,
+        y: cameraY + (screenY - height * 0.5) / safeZoom
+      };
+    }
+
+    function getConstellationVisualScale(zoom = mapsCamera.zoom) {
+      return clamp(Math.pow(Math.max(zoom, 0.0001), 0.58), 0.56, 2.05);
+    }
+
+    function centerMapsCameraOnActive(snap = false) {
+      const orderedMaps = getOrderedMaps();
+      if (!orderedMaps.length) return;
+
+      const activeIndex = Math.max(0, orderedMaps.findIndex(map => map.id === activeMapId));
+      const point = getConstellationMapWorldPoint(orderedMaps[activeIndex], activeIndex, orderedMaps.length);
+
+      mapsCamera.targetX = point.x;
+      mapsCamera.targetY = point.y;
+
+      if (snap) {
+        mapsCamera.x = point.x;
+        mapsCamera.y = point.y;
+      }
+    }
+
+    function shouldShowCenterMapsButton() {
+      const orderedMaps = getOrderedMaps();
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null || !orderedMaps.length) return false;
+
+      const activeIndex = Math.max(0, orderedMaps.findIndex(map => map.id === activeMapId));
+      const point = getConstellationMapWorldPoint(orderedMaps[activeIndex], activeIndex, orderedMaps.length);
+      const dx = mapsCamera.x - point.x;
+      const dy = mapsCamera.y - point.y;
+      return Math.hypot(dx, dy) > Math.max(120, Math.min(width, height) * 0.12);
+    }
+
+    function updateMapsCenterButton() {
+      centerMapsBtn.classList.toggle("is-visible", shouldShowCenterMapsButton());
     }
 
     function resolveConstellationTarget(x, y) {
@@ -1600,42 +1906,39 @@
       mapsLabel.classList.add("is-visible");
     }
 
-    function drawConstellationBackdrop(time, centerX, centerY) {
-      const glow = mapsCtx.createRadialGradient(centerX, centerY, 0, centerX, centerY, Math.max(width, height) * 0.44);
-      glow.addColorStop(0, "rgba(178, 200, 216, 0.08)");
-      glow.addColorStop(0.42, "rgba(62, 84, 102, 0.045)");
-      glow.addColorStop(1, "rgba(0,0,0,0)");
-      mapsCtx.fillStyle = glow;
+    function drawConstellationBackdrop(time) {
+      mapsCtx.fillStyle = "#000000";
       mapsCtx.fillRect(0, 0, width, height);
 
-      for (let i = 0; i < 28; i++) {
+      const fieldWidth = width + 180;
+      const fieldHeight = height + 180;
+
+      for (let i = 0; i < 96; i++) {
         const seed = i + 1;
-        const x = (hash01(seed * 3.7) * (width + 140)) - 70;
-        const y = (hash01(seed * 8.9 + 14) * (height + 100)) - 50;
-        const driftX = Math.sin(time * 0.00018 + seed * 2.4) * 8;
-        const driftY = Math.cos(time * 0.00014 + seed * 1.7) * 6;
-        const radius = 0.6 + hash01(seed * 5.1) * 1.1;
+        const parallax = 0.12 + hash01(seed * 2.6) * 0.16;
+        const driftX = Math.sin(time * 0.00012 + seed * 2.4) * 2.2;
+        const driftY = Math.cos(time * 0.0001 + seed * 1.7) * 2;
+        const glowRadius = 2.6 + hash01(seed * 5.1) * 5.6;
+        const coreRadius = 0.35 + hash01(seed * 6.8) * 1.25;
+        const glowAlpha = 0.025 + hash01(seed * 4.2) * 0.05;
+        const coreAlpha = 0.18 + hash01(seed * 9.4) * 0.32;
+        const baseX = (hash01(seed * 3.7) * fieldWidth * 3.4) - fieldWidth * 1.7;
+        const baseY = (hash01(seed * 8.9 + 14) * fieldHeight * 3) - fieldHeight * 1.5;
+        const starX = wrap(baseX - mapsCamera.x * parallax, fieldWidth) - 90 + driftX;
+        const starY = wrap(baseY - mapsCamera.y * parallax, fieldHeight) - 90 + driftY;
 
+        const glow = mapsCtx.createRadialGradient(starX, starY, 0, starX, starY, glowRadius);
+        glow.addColorStop(0, `rgba(236, 244, 250, ${glowAlpha})`);
+        glow.addColorStop(1, "rgba(0,0,0,0)");
+        mapsCtx.fillStyle = glow;
         mapsCtx.beginPath();
-        mapsCtx.arc(x + driftX, y + driftY, radius, 0, Math.PI * 2);
-        mapsCtx.fillStyle = `rgba(212, 228, 239, ${0.02 + hash01(seed * 6.4) * 0.026})`;
+        mapsCtx.arc(starX, starY, glowRadius, 0, Math.PI * 2);
         mapsCtx.fill();
-      }
-    }
-
-    function drawConstellationOrbits(orbits, centerX, centerY) {
-      for (const orbit of orbits) {
-        mapsCtx.beginPath();
-        mapsCtx.ellipse(centerX, centerY, orbit.radius, orbit.radius * orbit.flatten, 0, 0, Math.PI * 2);
-        mapsCtx.strokeStyle = "rgba(196, 216, 230, 0.055)";
-        mapsCtx.lineWidth = 1;
-        mapsCtx.stroke();
 
         mapsCtx.beginPath();
-        mapsCtx.ellipse(centerX, centerY, orbit.radius, orbit.radius * orbit.flatten, 0, orbit.highlightAngle, orbit.highlightAngle + 0.26);
-        mapsCtx.strokeStyle = "rgba(224, 238, 247, 0.12)";
-        mapsCtx.lineWidth = 1.3;
-        mapsCtx.stroke();
+        mapsCtx.arc(starX, starY, coreRadius, 0, Math.PI * 2);
+        mapsCtx.fillStyle = `rgba(245, 249, 252, ${coreAlpha})`;
+        mapsCtx.fill();
       }
     }
 
@@ -1764,119 +2067,65 @@
     }
 
     function buildConstellationState(time) {
-      const orderedMaps = [...maps].sort((a, b) => a.id - b.id);
-      const activeMap = getActiveMap() || orderedMaps[0];
-      if (!activeMap) {
-        return { centerX: width / 2, centerY: height / 2, orbits: [], items: [] };
+      const orderedMaps = getOrderedMaps();
+      if (!orderedMaps.length) {
+        return { items: [] };
       }
 
-      const centerX = width * 0.5;
-      const centerY = height * 0.5;
-      const minDimension = Math.min(width, height);
-      const activeSummary = summarizeMap(activeMap, orderedMaps.findIndex(map => map.id === activeMap.id));
-      const activeRadius = clamp(activeSummary.visualRadius * 1.45, 28, 50);
+      const items = [];
+      const visualScale = getConstellationVisualScale();
 
-      const otherMaps = orderedMaps.filter(map => map.id !== activeMap.id);
-      const firstOrbitRadius = Math.max(activeRadius + 74, minDimension * 0.22);
-      const orbitGap = Math.max(56, Math.min(96, minDimension * 0.14));
-      const minSeparation = Math.max(96, Math.min(142, minDimension * 0.22));
+      for (let index = 0; index < orderedMaps.length; index++) {
+        const map = orderedMaps[index];
+        const summary = summarizeMap(map, index);
+        const worldPoint = getConstellationMapWorldPoint(map, index, orderedMaps.length);
+        const driftX = draggedOverlayMapId === map.id
+          ? overlayDraggedMapDriftX
+          : Math.sin(time * 0.00018 + map.id * 0.9) * 6;
+        const driftY = draggedOverlayMapId === map.id
+          ? overlayDraggedMapDriftY
+          : Math.cos(time * 0.00022 + map.id * 1.1) * 8;
+        const point = projectConstellationPoint(worldPoint.x + driftX, worldPoint.y + driftY);
+        const isActive = map.id === activeMapId;
+        const radius = clamp(summary.visualRadius * (isActive ? 1.16 : 1) * visualScale, 14, 54);
 
-      const orbitRadii = [];
-      const orbitCapacities = [];
-      let capacityTotal = 0;
-      let nextRadius = firstOrbitRadius;
-
-      while (capacityTotal < otherMaps.length || orbitRadii.length === 0) {
-        orbitRadii.push(nextRadius);
-        orbitCapacities.push(Math.max(4, Math.floor((Math.PI * 2 * nextRadius) / minSeparation)));
-        capacityTotal += orbitCapacities[orbitCapacities.length - 1];
-        nextRadius += orbitGap;
-      }
-
-      orbitCapacities[orbitCapacities.length - 1] = Math.max(1, orbitCapacities[orbitCapacities.length - 1] - 1);
-      capacityTotal = orbitCapacities.reduce((sum, value) => sum + value, 0);
-
-      while (capacityTotal < otherMaps.length) {
-        orbitRadii.push(nextRadius);
-        orbitCapacities.push(Math.max(3, Math.floor((Math.PI * 2 * nextRadius) / minSeparation) - 1));
-        capacityTotal = orbitCapacities.reduce((sum, value) => sum + value, 0);
-        nextRadius += orbitGap * 0.92;
-      }
-
-      const orbitItems = [];
-      const orbits = [];
-      let cursor = 0;
-
-      for (let orbitIndex = 0; orbitIndex < orbitRadii.length; orbitIndex++) {
-        const radius = orbitRadii[orbitIndex];
-        const flatten = 0.92;
-        const isOuter = orbitIndex === orbitRadii.length - 1;
-        const mapCount = Math.min(otherMaps.length - cursor, orbitCapacities[orbitIndex]);
-        const slotCount = mapCount + (isOuter ? 1 : 0);
-        const speed = Math.max(0.0000009, 0.0000023 - orbitIndex * 0.00000024);
-        const rotation = time * speed;
-        const baseAngle = -Math.PI / 2 + orbitIndex * 0.42;
-
-        orbits.push({
+        items.push({
+          kind: "map",
+          mapId: map.id,
+          label: summary.name,
+          summary,
+          x: point.x,
+          y: point.y,
+          worldX: worldPoint.x,
+          worldY: worldPoint.y,
+          driftX,
+          driftY,
           radius,
-          flatten,
-          highlightAngle: baseAngle + rotation + 0.22
+          hitRadius: clamp(radius + 18, 30, 70),
+          isActive
         });
-
-        if (isOuter) {
-          const newAngle = baseAngle + rotation;
-          orbitItems.push({
-            kind: "new",
-            label: "Nuevo mapa",
-            x: centerX + Math.cos(newAngle) * radius,
-            y: centerY + Math.sin(newAngle) * radius * flatten,
-            radius: clamp(18 + minDimension * 0.008, 18, 24),
-            hitRadius: clamp(32 + minDimension * 0.016, 32, 42)
-          });
-        }
-
-        for (let i = 0; i < mapCount; i++) {
-          const slotIndex = i + (isOuter ? 1 : 0);
-          const angle = baseAngle + rotation + ((Math.PI * 2) * slotIndex / slotCount);
-          const map = otherMaps[cursor++];
-          const summary = summarizeMap(map, orderedMaps.findIndex(candidate => candidate.id === map.id));
-
-          orbitItems.push({
-            kind: "map",
-            mapId: map.id,
-            label: summary.name,
-            summary,
-            x: centerX + Math.cos(angle) * radius,
-            y: centerY + Math.sin(angle) * radius * flatten,
-            radius: summary.visualRadius,
-            hitRadius: summary.visualRadius + 16,
-            isActive: false
-          });
-        }
       }
 
-      orbitItems.push({
-        kind: "map",
-        mapId: activeMap.id,
-        label: activeSummary.name,
-        summary: activeSummary,
-        x: centerX,
-        y: centerY,
-        radius: activeRadius,
-        hitRadius: activeRadius + 18,
-        isActive: true
+      items.push({
+        kind: "new",
+        label: "Nuevo mapa",
+        x: width - Math.max(76, width * 0.1),
+        y: Math.max(82, height * 0.16) + Math.sin(time * 0.0004) * 4,
+        radius: clamp(18 + Math.min(width, height) * 0.008, 18, 24),
+        hitRadius: clamp(32 + Math.min(width, height) * 0.016, 32, 42)
       });
 
       return {
-        centerX,
-        centerY,
-        orbits,
-        items: orbitItems
+        items
       };
     }
 
     function drawConstellation(time) {
       mapsCtx.clearRect(0, 0, width, height);
+      mapsCamera.x += (mapsCamera.targetX - mapsCamera.x) * 0.12;
+      mapsCamera.y += (mapsCamera.targetY - mapsCamera.y) * 0.12;
+      mapsCamera.zoom += (mapsCamera.targetZoom - mapsCamera.zoom) * 0.14;
+      updateMapsCenterButton();
 
       const layout = buildConstellationState(time);
       constellationItems = layout.items;
@@ -1891,8 +2140,7 @@
 
       hoveredMapId = hoveredItem && hoveredItem.kind === "map" ? hoveredItem.mapId : null;
 
-      drawConstellationBackdrop(time, layout.centerX, layout.centerY);
-      drawConstellationOrbits(layout.orbits, layout.centerX, layout.centerY);
+      drawConstellationBackdrop(time);
 
       for (const item of constellationItems) {
         const hovered = hoveredItem === item;
@@ -1922,7 +2170,11 @@
           ? hoveredTarget.item
           : hoveredItem
       );
-      mapsOverlay.style.cursor = hoveredTarget ? "pointer" : "default";
+      mapsOverlay.style.cursor = (overlayPanning || draggedOverlayMapId !== null)
+        ? "grabbing"
+        : hoveredTarget
+          ? "pointer"
+          : "default";
     }
 
     function render(time) {
@@ -1995,12 +2247,13 @@
       nodeNoteInput.value = "";
     }
 
-    function restoreWorkspace(restoredMaps, nextActiveMapId, nextMapIdCounter, shouldResave = false) {
+    function restoreWorkspace(restoredMaps, nextActiveMapId, nextMapIdCounter, nextMapsViewState = null, shouldResave = false) {
       maps = restoredMaps;
       mapIdCounter = Math.max(nextMapIdCounter, ...maps.map(map => map.id));
       activeMapId = maps.some(map => map.id === nextActiveMapId) ? nextActiveMapId : maps[0].id;
 
       applyMapState(getActiveMap());
+      applyMapsViewState(nextMapsViewState);
       updateMapsButton();
 
       if (shouldResave) {
@@ -2020,6 +2273,7 @@
           version: STORAGE_VERSION,
           activeMapId,
           mapIdCounter,
+          mapsView: captureMapsViewState(),
           maps
         };
 
@@ -2044,12 +2298,14 @@
                 state.version !== STORAGE_VERSION ||
                 !Number.isFinite(state.mapIdCounter) ||
                 !Number.isFinite(state.activeMapId) ||
-                state.maps.some(map => !Number.isFinite(map && map.id));
+                state.maps.some(map => !Number.isFinite(map && map.id)) ||
+                !sanitizeMapsViewState(state.mapsView);
 
               return restoreWorkspace(
                 restoredMaps,
                 state.activeMapId,
                 state.mapIdCounter ?? 0,
+                sanitizeMapsViewState(state.mapsView),
                 needsResave
               );
             }
@@ -2070,6 +2326,7 @@
                 restoredMaps,
                 restoredMaps[activeIndex].id,
                 restoredMaps.length,
+                null,
                 true
               );
             }
@@ -2085,7 +2342,7 @@
         }
 
         const restoredMap = sanitizeStoredMap(legacyState, 1);
-        return restoreWorkspace([restoredMap], restoredMap.id, 1, true);
+        return restoreWorkspace([restoredMap], restoredMap.id, 1, null, true);
       } catch (error) {
         console.error("No se pudo cargar el estado:", error);
         return false;
@@ -2217,17 +2474,155 @@
       overlayPointer.x = x;
       overlayPointer.y = y;
       overlayPointer.inside = true;
+
+      if (overlayPanning) {
+        const dx = x - overlayPanLastX;
+        const dy = y - overlayPanLastY;
+
+        if (dx !== 0 || dy !== 0) {
+          overlayPointerMoved = true;
+          mapsCamera.targetX -= dx / Math.max(mapsCamera.zoom, 0.0001);
+          mapsCamera.targetY -= dy / Math.max(mapsCamera.zoom, 0.0001);
+          mapsCamera.x = mapsCamera.targetX;
+          mapsCamera.y = mapsCamera.targetY;
+        }
+
+        overlayPanLastX = x;
+        overlayPanLastY = y;
+        return;
+      }
+
+      if (draggedOverlayMapId !== null) {
+        const world = screenToConstellationWorld(x, y);
+        const nextX = world.x - overlayMapDragOffsetX - overlayDraggedMapDriftX;
+        const nextY = world.y - overlayMapDragOffsetY - overlayDraggedMapDriftY;
+
+        if (setMapConstellationPosition(draggedOverlayMapId, nextX, nextY)) {
+          overlayPointerMoved = true;
+        }
+      }
+    });
+
+    mapsOverlay.addEventListener("wheel", (e) => {
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null) return;
+
+      e.preventDefault();
+
+      const { x, y } = pointerPosition(e, mapsOverlay);
+      overlayPointer.x = x;
+      overlayPointer.y = y;
+      overlayPointer.inside = true;
+
+      const worldBefore = screenToConstellationWorld(
+        x,
+        y,
+        mapsCamera.targetZoom,
+        mapsCamera.targetX,
+        mapsCamera.targetY
+      );
+      const zoomFactor = Math.exp(-e.deltaY * 0.0012);
+      const nextZoom = clamp(mapsCamera.targetZoom * zoomFactor, MAPS_ZOOM_MIN, MAPS_ZOOM_MAX);
+
+      mapsCamera.targetZoom = nextZoom;
+      mapsCamera.targetX = worldBefore.x - (x - width * 0.5) / nextZoom;
+      mapsCamera.targetY = worldBefore.y - (y - height * 0.5) / nextZoom;
+    }, { passive: false });
+
+    mapsOverlay.addEventListener("mousedown", (e) => {
+      if (!mapsOverlayOpen || pendingDeleteMapId !== null) return;
+
+      const { x, y } = pointerPosition(e, mapsOverlay);
+      overlayPointer.x = x;
+      overlayPointer.y = y;
+      overlayPointer.inside = true;
+
+      const target = resolveConstellationTarget(x, y);
+      if (target) {
+        if (target.kind === "map") {
+          const world = screenToConstellationWorld(x, y);
+          draggedOverlayMapId = target.item.mapId;
+          overlayMapDragOffsetX = world.x - (target.item.worldX + target.item.driftX);
+          overlayMapDragOffsetY = world.y - (target.item.worldY + target.item.driftY);
+          overlayDraggedMapDriftX = target.item.driftX;
+          overlayDraggedMapDriftY = target.item.driftY;
+          overlayPointerMoved = false;
+          mapsOverlay.style.cursor = "grabbing";
+        }
+        return;
+      }
+
+      overlayPanning = true;
+      overlayPointerMoved = false;
+      overlayPanLastX = x;
+      overlayPanLastY = y;
+      mapsOverlay.style.cursor = "grabbing";
+    });
+
+    mapsOverlay.addEventListener("mouseup", () => {
+      const moved = overlayPointerMoved;
+      const draggedMap = draggedOverlayMapId !== null;
+      if (!overlayPanning && !draggedMap) return;
+
+      overlayPanning = false;
+      draggedOverlayMapId = null;
+      overlayMapDragOffsetX = 0;
+      overlayMapDragOffsetY = 0;
+      overlayDraggedMapDriftX = 0;
+      overlayDraggedMapDriftY = 0;
+      overlaySuppressClick = moved;
+      overlayPointerMoved = false;
+      mapsOverlay.style.cursor = "default";
+
+      if (draggedMap && moved) {
+        saveState(false);
+      }
     });
 
     mapsOverlay.addEventListener("mouseleave", () => {
+      const draggedMap = draggedOverlayMapId !== null;
+      const moved = overlayPointerMoved;
       overlayPointer.inside = false;
       hoveredMapId = null;
+      overlayPanning = false;
+      draggedOverlayMapId = null;
+      overlayMapDragOffsetX = 0;
+      overlayMapDragOffsetY = 0;
+      overlayDraggedMapDriftX = 0;
+      overlayDraggedMapDriftY = 0;
+      overlayPointerMoved = false;
       clearMapsLabel();
       mapsOverlay.style.cursor = "default";
+
+      if (draggedMap && moved) {
+        saveState(false);
+      }
+    });
+
+    centerMapsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      overlayPanning = false;
+      overlayPointerMoved = false;
+      overlaySuppressClick = false;
+      draggedOverlayMapId = null;
+      overlayMapDragOffsetX = 0;
+      overlayMapDragOffsetY = 0;
+      overlayDraggedMapDriftX = 0;
+      overlayDraggedMapDriftY = 0;
+      centerMapsCameraOnActive(false);
+      updateMapsCenterButton();
+    });
+
+    centerMapsBtn.addEventListener("mousedown", (e) => {
+      e.stopPropagation();
     });
 
     mapsOverlay.addEventListener("click", (e) => {
       if (!mapsOverlayOpen) return;
+
+      if (overlaySuppressClick) {
+        overlaySuppressClick = false;
+        return;
+      }
 
       if (pendingDeleteMapId !== null) {
         closeDeleteConfirmation();
