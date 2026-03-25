@@ -508,7 +508,7 @@
     const STORAGE_KEY = "sobrio-tree-state-v3";
     const LEGACY_MULTI_STORAGE_KEY = "sobrio-tree-state-v2";
     const LEGACY_STORAGE_KEY = "sobrio-tree-state-v1";
-    const STORAGE_VERSION = 6;
+    const STORAGE_VERSION = 7;
 
     const canvas = document.getElementById("scene");
     const ctx = canvas.getContext("2d");
@@ -599,6 +599,83 @@
 
     const MAPS_ZOOM_MIN = 0.08;
     const MAPS_ZOOM_MAX = 18;
+    const STAR_TYPE_WEIGHTS = [
+      { type: "yellow", weight: 36 },
+      { type: "orange", weight: 28 },
+      { type: "red", weight: 22 },
+      { type: "blue", weight: 14 }
+    ];
+    const STAR_RED_GIANT_PROBABILITY = 0.12;
+    const STAR_TYPE_PROFILES = {
+      blue: {
+        coreColor: [118, 162, 255],
+        haloColor: [58, 108, 255],
+        outlineColor: [199, 221, 255],
+        scaleRange: [1.15, 1.42],
+        luminosityRange: [1.04, 1.22],
+        auraScale: 3.12,
+        auraAlpha: 0.17,
+        bodyAlpha: 0.64,
+        whiteCoreAlpha: 0.96,
+        whiteCoreScale: 0.33,
+        spikeAlpha: 0.44,
+        spikeLength: 4.2,
+        outlineAlpha: 0.18,
+        pulseScale: 0.016,
+        orbitSpeed: 1.08
+      },
+      yellow: {
+        coreColor: [255, 205, 86],
+        haloColor: [255, 170, 48],
+        outlineColor: [255, 226, 162],
+        scaleRange: [0.94, 1.14],
+        luminosityRange: [0.98, 1.12],
+        auraScale: 2.84,
+        auraAlpha: 0.16,
+        bodyAlpha: 0.6,
+        whiteCoreAlpha: 0.96,
+        whiteCoreScale: 0.34,
+        spikeAlpha: 0.38,
+        spikeLength: 3.6,
+        outlineAlpha: 0.16,
+        pulseScale: 0.015,
+        orbitSpeed: 0.98
+      },
+      orange: {
+        coreColor: [255, 162, 78],
+        haloColor: [255, 116, 46],
+        outlineColor: [255, 211, 174],
+        scaleRange: [0.9, 1.08],
+        luminosityRange: [0.94, 1.06],
+        auraScale: 2.7,
+        auraAlpha: 0.15,
+        bodyAlpha: 0.58,
+        whiteCoreAlpha: 0.94,
+        whiteCoreScale: 0.32,
+        spikeAlpha: 0.34,
+        spikeLength: 3.35,
+        outlineAlpha: 0.145,
+        pulseScale: 0.014,
+        orbitSpeed: 0.94
+      },
+      red: {
+        coreColor: [255, 108, 93],
+        haloColor: [230, 73, 69],
+        outlineColor: [255, 204, 195],
+        scaleRange: [0.86, 1.06],
+        luminosityRange: [0.92, 1.04],
+        auraScale: 2.58,
+        auraAlpha: 0.145,
+        bodyAlpha: 0.55,
+        whiteCoreAlpha: 0.92,
+        whiteCoreScale: 0.29,
+        spikeAlpha: 0.28,
+        spikeLength: 3.1,
+        outlineAlpha: 0.13,
+        pulseScale: 0.013,
+        orbitSpeed: 0.88
+      }
+    };
 
     function resize() {
       width = window.innerWidth;
@@ -681,6 +758,109 @@
       return x - Math.floor(x);
     }
 
+    function rgba(color, alpha) {
+      return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${alpha})`;
+    }
+
+    function roundValue(value, precision = 3) {
+      return Number(value.toFixed(precision));
+    }
+
+    function randomInRange(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    function getStarTypeTemplate(starType, starVariant = null) {
+      const base = STAR_TYPE_PROFILES[starType] || STAR_TYPE_PROFILES.yellow;
+      if (starType !== "red" || starVariant !== "giant") {
+        return base;
+      }
+
+      return {
+        ...base,
+        scaleRange: [1.35, 1.85],
+        luminosityRange: [1.02, 1.18],
+        auraScale: 3.5,
+        auraAlpha: 0.18,
+        bodyAlpha: 0.6,
+        whiteCoreAlpha: 0.9,
+        whiteCoreScale: 0.26,
+        spikeAlpha: 0.24,
+        spikeLength: 4.4,
+        outlineAlpha: 0.12,
+        pulseScale: 0.011,
+        orbitSpeed: 0.72
+      };
+    }
+
+    function pickWeightedStarType() {
+      const totalWeight = STAR_TYPE_WEIGHTS.reduce((sum, entry) => sum + entry.weight, 0);
+      let roll = Math.random() * totalWeight;
+
+      for (const entry of STAR_TYPE_WEIGHTS) {
+        roll -= entry.weight;
+        if (roll <= 0) {
+          return entry.type;
+        }
+      }
+
+      return STAR_TYPE_WEIGHTS[STAR_TYPE_WEIGHTS.length - 1].type;
+    }
+
+    function createRandomStarIdentity() {
+      const starType = pickWeightedStarType();
+      const starVariant = starType === "red" && Math.random() < STAR_RED_GIANT_PROBABILITY
+        ? "giant"
+        : null;
+      const template = getStarTypeTemplate(starType, starVariant);
+
+      return {
+        starType,
+        starVariant,
+        starScale: roundValue(randomInRange(template.scaleRange[0], template.scaleRange[1])),
+        starLuminosity: roundValue(randomInRange(template.luminosityRange[0], template.luminosityRange[1]))
+      };
+    }
+
+    function readStoredStarIdentity(rawMap) {
+      const starType = typeof (rawMap && rawMap.starType) === "string"
+        ? rawMap.starType
+        : null;
+      if (!STAR_TYPE_PROFILES[starType]) return null;
+
+      const starVariant = starType === "red" && rawMap && rawMap.starVariant === "giant"
+        ? "giant"
+        : null;
+      const template = getStarTypeTemplate(starType, starVariant);
+      const scale = Number(rawMap && rawMap.starScale);
+      const luminosity = Number(rawMap && rawMap.starLuminosity);
+
+      if (!Number.isFinite(scale) || !Number.isFinite(luminosity)) {
+        return null;
+      }
+
+      return {
+        starType,
+        starVariant,
+        starScale: roundValue(clamp(scale, template.scaleRange[0], template.scaleRange[1])),
+        starLuminosity: roundValue(clamp(luminosity, template.luminosityRange[0], template.luminosityRange[1]))
+      };
+    }
+
+    function sanitizeStarIdentity(rawMap) {
+      return readStoredStarIdentity(rawMap) || createRandomStarIdentity();
+    }
+
+    function getMapStarProfile(map) {
+      const identity = sanitizeStarIdentity(map);
+      const template = getStarTypeTemplate(identity.starType, identity.starVariant);
+
+      return {
+        ...identity,
+        ...template
+      };
+    }
+
     function allocateMapId() {
       mapIdCounter += 1;
       return mapIdCounter;
@@ -730,6 +910,7 @@
       let nextNodeId = 0;
       const mapNodes = [];
       const mapLinks = [];
+      const starIdentity = createRandomStarIdentity();
 
       function addMapNode({ x, y, parentId = null, level = 0, isCenter = false, label = "", note = "" }) {
         const id = ++nextNodeId;
@@ -778,6 +959,10 @@
 
       return {
         id: mapId,
+        starType: starIdentity.starType,
+        starVariant: starIdentity.starVariant,
+        starScale: starIdentity.starScale,
+        starLuminosity: starIdentity.starLuminosity,
         nodeIdCounter: nextNodeId,
         selectedNodeId: center.id,
         constellationPosition: null,
@@ -842,8 +1027,14 @@
         return createDefaultMapState(mapId);
       }
 
+      const starIdentity = sanitizeStarIdentity(rawMap);
+
       return {
         id: mapId,
+        starType: starIdentity.starType,
+        starVariant: starIdentity.starVariant,
+        starScale: starIdentity.starScale,
+        starLuminosity: starIdentity.starLuminosity,
         nodeIdCounter: Math.max(rawMap && rawMap.nodeIdCounter ? rawMap.nodeIdCounter : 0, maxNodeId),
         selectedNodeId: validNodeIds.has(rawMap && rawMap.selectedNodeId)
           ? rawMap.selectedNodeId
@@ -862,8 +1053,13 @@
 
     function serializeCurrentMap(mapId = activeMapId) {
       const existingMap = getMapById(mapId);
+      const starIdentity = sanitizeStarIdentity(existingMap);
       return {
         id: mapId,
+        starType: starIdentity.starType,
+        starVariant: starIdentity.starVariant,
+        starScale: starIdentity.starScale,
+        starLuminosity: starIdentity.starLuminosity,
         nodeIdCounter,
         selectedNodeId,
         constellationPosition: cloneConstellationPosition(existingMap && existingMap.constellationPosition),
@@ -1035,6 +1231,8 @@
 
     function clearMapsLabel() {
       mapsLabel.textContent = "";
+      mapsLabel.style.color = "";
+      mapsLabel.style.textShadow = "";
       mapsLabel.classList.remove("is-visible");
     }
 
@@ -1901,6 +2099,10 @@
       }
 
       mapsLabel.textContent = item.label;
+      mapsLabel.style.color = item.star ? rgba(item.star.outlineColor, 0.98) : "";
+      mapsLabel.style.textShadow = item.star
+        ? `0 0 22px ${rgba(item.star.haloColor, 0.32)}`
+        : "";
       mapsLabel.style.left = `${clamp(item.x, 24, width - 24)}px`;
       mapsLabel.style.top = `${clamp(item.y - item.radius - 18, 28, height - 28)}px`;
       mapsLabel.classList.add("is-visible");
@@ -1942,70 +2144,101 @@
       }
     }
 
+    function drawStarSpike(x, y, length, angle, color, alpha, lineWidth) {
+      const dx = Math.cos(angle) * length;
+      const dy = Math.sin(angle) * length;
+      const spike = mapsCtx.createLinearGradient(x - dx, y - dy, x + dx, y + dy);
+      spike.addColorStop(0, "rgba(0,0,0,0)");
+      spike.addColorStop(0.42, rgba(color, alpha * 0.2));
+      spike.addColorStop(0.5, `rgba(255, 255, 255, ${alpha})`);
+      spike.addColorStop(0.58, rgba(color, alpha * 0.2));
+      spike.addColorStop(1, "rgba(0,0,0,0)");
+
+      mapsCtx.strokeStyle = spike;
+      mapsCtx.lineWidth = lineWidth;
+      mapsCtx.beginPath();
+      mapsCtx.moveTo(x - dx, y - dy);
+      mapsCtx.lineTo(x + dx, y + dy);
+      mapsCtx.stroke();
+    }
+
     function drawConstellationMap(item, time, hovered) {
+      const star = item.star;
       const emphasis = item.isActive ? 1.16 : hovered ? 1.12 : 1;
       const radius = item.radius * emphasis;
-      const pulse = 1 + Math.sin(time * 0.0015 + item.summary.seed * 7.1) * (item.isActive ? 0.03 : 0.02);
+      const pulse =
+        1 +
+        Math.sin(time * 0.0015 * star.orbitSpeed + item.summary.seed * 7.1) *
+          (star.pulseScale + (item.isActive ? 0.006 : hovered ? 0.003 : 0));
       const coreRadius = radius * pulse;
-      const auraRadius = coreRadius * (item.isActive ? 2.4 : hovered ? 2.1 : 1.85);
+      const auraRadius = coreRadius * star.auraScale * (item.isActive ? 1.1 : hovered ? 1.05 : 1);
+      const auraAlpha = star.auraAlpha * star.starLuminosity * (item.isActive ? 1.3 : hovered ? 1.14 : 1);
+      const bodyRadius = coreRadius * 1.45;
 
       const aura = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, auraRadius);
-      aura.addColorStop(0, item.isActive ? "rgba(228, 241, 250, 0.18)" : hovered ? "rgba(223, 237, 247, 0.14)" : "rgba(185, 206, 221, 0.06)");
+      aura.addColorStop(0, rgba(star.haloColor, auraAlpha));
+      aura.addColorStop(0.34, rgba(star.haloColor, auraAlpha * 0.42));
       aura.addColorStop(1, "rgba(0,0,0,0)");
       mapsCtx.fillStyle = aura;
       mapsCtx.beginPath();
       mapsCtx.arc(item.x, item.y, auraRadius, 0, Math.PI * 2);
       mapsCtx.fill();
 
-      const satelliteCount = item.isActive ? Math.min(9, item.summary.satelliteCount + 1) : item.summary.satelliteCount;
-      for (let i = 0; i < satelliteCount; i++) {
-        const seed = item.summary.seed + i * 1.73;
-        const angle = (Math.PI * 2 * i / satelliteCount) + hash01(seed * 3.1) * 0.46 + time * 0.00018 * (0.7 + hash01(seed * 4.9) * 0.4);
-        const distance = coreRadius * (1.45 + hash01(seed * 8.4) * 0.45 + (item.isActive ? 0.14 : 0));
-        const sx = item.x + Math.cos(angle) * distance;
-        const sy = item.y + Math.sin(angle) * distance;
-        const satelliteRadius = clamp(coreRadius * (0.16 + hash01(seed * 6.6) * 0.14), 1.2, 4.2);
-        const mx = lerp(item.x, sx, 0.48) + Math.sin(seed * 4.2) * coreRadius * 0.08;
-        const my = lerp(item.y, sy, 0.48) + Math.cos(seed * 3.6) * coreRadius * 0.08;
+      const bodyGlow = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, bodyRadius);
+      bodyGlow.addColorStop(0, rgba(star.coreColor, star.bodyAlpha * 0.95));
+      bodyGlow.addColorStop(0.4, rgba(star.coreColor, star.bodyAlpha * 0.46));
+      bodyGlow.addColorStop(1, "rgba(0,0,0,0)");
+      mapsCtx.fillStyle = bodyGlow;
+      mapsCtx.beginPath();
+      mapsCtx.arc(item.x, item.y, bodyRadius, 0, Math.PI * 2);
+      mapsCtx.fill();
 
-        mapsCtx.beginPath();
-        mapsCtx.moveTo(item.x, item.y);
-        mapsCtx.quadraticCurveTo(mx, my, sx, sy);
-        mapsCtx.strokeStyle = item.isActive
-          ? "rgba(225, 239, 248, 0.16)"
-          : hovered
-            ? "rgba(214, 230, 241, 0.12)"
-            : "rgba(185, 205, 219, 0.07)";
-        mapsCtx.lineWidth = 1;
-        mapsCtx.stroke();
+      const innerGlow = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, coreRadius * 1.18);
+      innerGlow.addColorStop(0, rgba(star.coreColor, star.bodyAlpha * 0.62));
+      innerGlow.addColorStop(0.72, rgba(star.coreColor, star.bodyAlpha * 0.12));
+      innerGlow.addColorStop(1, "rgba(0,0,0,0)");
+      mapsCtx.fillStyle = innerGlow;
+      mapsCtx.beginPath();
+      mapsCtx.arc(item.x, item.y, coreRadius * 1.18, 0, Math.PI * 2);
+      mapsCtx.fill();
 
-        mapsCtx.beginPath();
-        mapsCtx.arc(sx, sy, satelliteRadius, 0, Math.PI * 2);
-        mapsCtx.fillStyle = item.isActive
-          ? "rgba(240, 247, 252, 0.86)"
-          : hovered
-            ? "rgba(229, 240, 248, 0.74)"
-            : "rgba(203, 220, 231, 0.52)";
-        mapsCtx.fill();
+      const spikeAlpha = star.spikeAlpha * star.starLuminosity * (item.isActive ? 1.14 : hovered ? 1.06 : 1);
+      const spikeLength = coreRadius * star.spikeLength * (item.isActive ? 1.08 : hovered ? 1.03 : 1);
+      drawStarSpike(item.x, item.y, spikeLength, Math.PI / 2, star.haloColor, spikeAlpha, 1.18);
+      drawStarSpike(item.x, item.y, spikeLength * 0.76, 0, star.haloColor, spikeAlpha * 0.88, 0.96);
+
+      if (star.starType === "blue" || star.starVariant === "giant" || item.isActive) {
+        drawStarSpike(item.x, item.y, spikeLength * 0.42, Math.PI / 4, star.haloColor, spikeAlpha * 0.32, 0.8);
+        drawStarSpike(item.x, item.y, spikeLength * 0.32, -Math.PI / 4, star.haloColor, spikeAlpha * 0.22, 0.7);
       }
 
       mapsCtx.beginPath();
-      mapsCtx.arc(item.x, item.y, coreRadius, 0, Math.PI * 2);
-      mapsCtx.fillStyle = item.isActive
-        ? "rgba(238, 245, 250, 0.98)"
-        : hovered
-          ? "rgba(229, 239, 247, 0.94)"
-          : "rgba(195, 210, 221, 0.88)";
+      mapsCtx.arc(item.x, item.y, coreRadius * 0.72, 0, Math.PI * 2);
+      mapsCtx.fillStyle = rgba(star.coreColor, 0.84 + (item.isActive ? 0.06 : hovered ? 0.03 : 0));
+      mapsCtx.fill();
+
+      const whiteCoreRadius = coreRadius * star.whiteCoreScale;
+      const whiteCoreGlow = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, coreRadius * 0.92);
+      whiteCoreGlow.addColorStop(0, `rgba(255, 255, 255, ${star.whiteCoreAlpha})`);
+      whiteCoreGlow.addColorStop(0.38, `rgba(255, 255, 255, ${star.whiteCoreAlpha * 0.34})`);
+      whiteCoreGlow.addColorStop(1, "rgba(255,255,255,0)");
+      mapsCtx.fillStyle = whiteCoreGlow;
+      mapsCtx.beginPath();
+      mapsCtx.arc(item.x, item.y, coreRadius * 0.92, 0, Math.PI * 2);
       mapsCtx.fill();
 
       mapsCtx.beginPath();
-      mapsCtx.arc(item.x, item.y, coreRadius + 2.2, 0, Math.PI * 2);
-      mapsCtx.strokeStyle = item.isActive
-        ? "rgba(239, 246, 251, 0.24)"
-        : hovered
-          ? "rgba(229, 240, 247, 0.18)"
-          : "rgba(204, 223, 234, 0.08)";
-      mapsCtx.lineWidth = 1;
+      mapsCtx.arc(item.x, item.y, whiteCoreRadius, 0, Math.PI * 2);
+      mapsCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, star.whiteCoreAlpha + (item.isActive ? 0.04 : 0))})`;
+      mapsCtx.fill();
+
+      mapsCtx.beginPath();
+      mapsCtx.arc(item.x, item.y, coreRadius + 1.6, 0, Math.PI * 2);
+      mapsCtx.strokeStyle = rgba(
+        star.outlineColor,
+        star.outlineAlpha * (item.isActive ? 1.35 : hovered ? 1.12 : 1)
+      );
+      mapsCtx.lineWidth = 0.9;
       mapsCtx.stroke();
     }
 
@@ -2078,6 +2311,7 @@
       for (let index = 0; index < orderedMaps.length; index++) {
         const map = orderedMaps[index];
         const summary = summarizeMap(map, index);
+        const star = getMapStarProfile(map);
         const worldPoint = getConstellationMapWorldPoint(map, index, orderedMaps.length);
         const driftX = draggedOverlayMapId === map.id
           ? overlayDraggedMapDriftX
@@ -2087,13 +2321,18 @@
           : Math.cos(time * 0.00022 + map.id * 1.1) * 8;
         const point = projectConstellationPoint(worldPoint.x + driftX, worldPoint.y + driftY);
         const isActive = map.id === activeMapId;
-        const radius = clamp(summary.visualRadius * (isActive ? 1.16 : 1) * visualScale, 14, 54);
+        const radius = clamp(
+          summary.visualRadius * star.starScale * (isActive ? 1.16 : 1) * visualScale,
+          14,
+          star.starVariant === "giant" ? 78 : 58
+        );
 
         items.push({
           kind: "map",
           mapId: map.id,
           label: summary.name,
           summary,
+          star,
           x: point.x,
           y: point.y,
           worldX: worldPoint.x,
@@ -2101,7 +2340,7 @@
           driftX,
           driftY,
           radius,
-          hitRadius: clamp(radius + 18, 30, 70),
+          hitRadius: clamp(radius + 18, 30, star.starVariant === "giant" ? 102 : 74),
           isActive
         });
       }
@@ -2299,6 +2538,7 @@
                 !Number.isFinite(state.mapIdCounter) ||
                 !Number.isFinite(state.activeMapId) ||
                 state.maps.some(map => !Number.isFinite(map && map.id)) ||
+                state.maps.some(map => !readStoredStarIdentity(map)) ||
                 !sanitizeMapsViewState(state.mapsView);
 
               return restoreWorkspace(
