@@ -563,6 +563,7 @@
     let mapsOverlayOpen = false;
     let constellationItems = [];
     let hoveredMapId = null;
+    let overlaySelectedMapId = null;
     let pendingDeleteMapId = null;
     let overlayPanning = false;
     let overlayPanLastX = 0;
@@ -762,6 +763,15 @@
       return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${alpha})`;
     }
 
+    function mixColor(colorA, colorB, amount = 0.5) {
+      const t = clamp(amount, 0, 1);
+      return [
+        Math.round(lerp(colorA[0], colorB[0], t)),
+        Math.round(lerp(colorA[1], colorB[1], t)),
+        Math.round(lerp(colorA[2], colorB[2], t))
+      ];
+    }
+
     function roundValue(value, precision = 3) {
       return Number(value.toFixed(precision));
     }
@@ -885,6 +895,17 @@
 
     function getActiveMap() {
       return getMapById(activeMapId);
+    }
+
+    function getOverlaySelectedMap() {
+      if (!Number.isFinite(overlaySelectedMapId)) return null;
+      return getMapById(overlaySelectedMapId);
+    }
+
+    function getConstellationFocusMapId() {
+      if (!mapsOverlayOpen) return activeMapId;
+      const selectedMap = getOverlaySelectedMap();
+      return selectedMap ? selectedMap.id : null;
     }
 
     function getMapCenterNode(map) {
@@ -1284,9 +1305,13 @@
       const nextActiveId = mapId === activeMapId
         ? getNextMapIdAfterDelete(mapId)
         : activeMapId;
+      const nextSelectedId = overlaySelectedMapId === mapId
+        ? (mapId === activeMapId ? nextActiveId : null)
+        : overlaySelectedMapId;
 
       maps = maps.filter(existingMap => existingMap.id !== mapId);
       hoveredMapId = null;
+      overlaySelectedMapId = nextSelectedId;
       closeDeleteConfirmation();
 
       if (mapId === activeMapId && nextActiveId !== null) {
@@ -1310,6 +1335,7 @@
       overlayPointer.inside = false;
       constellationItems = [];
       hoveredMapId = null;
+      overlaySelectedMapId = null;
       overlayPanning = false;
       overlayPointerMoved = false;
       overlaySuppressClick = false;
@@ -1347,6 +1373,7 @@
       overlayPointer.inside = false;
       constellationItems = [];
       hoveredMapId = null;
+      overlaySelectedMapId = activeMapId;
       overlayPanning = false;
       overlayPointerMoved = false;
       overlaySuppressClick = false;
@@ -1401,10 +1428,13 @@
       syncActiveMapInMemory();
 
       const freshMap = createDefaultMapState();
+      freshMap.constellationPosition = findConstellationSpawnWorldPoint(freshMap);
       maps.push(freshMap);
-      applyMapState(freshMap);
+      overlaySelectedMapId = freshMap.id;
+      hoveredMapId = null;
       saveState(false);
-      closeMapsOverlay();
+      updateMapsButton();
+      updateMapsCenterButton();
       return true;
     }
 
@@ -1933,6 +1963,89 @@
         || getFallbackConstellationMapWorldPoint(map, index, totalMaps);
     }
 
+    function getConstellationScreenRadiusForMap(map, fallbackIndex = 0, zoom = mapsCamera.zoom) {
+      const summary = summarizeMap(map, fallbackIndex);
+      const star = getMapStarProfile(map);
+      return clamp(
+        summary.visualRadius * star.starScale * getConstellationVisualScale(zoom),
+        14,
+        star.starVariant === "giant" ? 78 : 58
+      );
+    }
+
+    function findConstellationSpawnScreenPoint(map) {
+      const candidateRadius = getConstellationScreenRadiusForMap(map, maps.length, mapsCamera.zoom);
+      const occupiedItems = constellationItems.filter(item => item.kind === "map" || item.kind === "new");
+      const margin = candidateRadius + 36;
+      const centerX = width * 0.5;
+      const centerY = height * 0.5;
+      const seedAngle = hash01(map.id * 13.7 + maps.length * 1.91) * Math.PI * 2;
+      const baseRadius = Math.max(candidateRadius * 3.2, Math.min(width, height) * 0.18);
+      const ringStep = Math.max(candidateRadius * 2.2, Math.min(width, height) * 0.13);
+      let bestCandidate = {
+        x: clamp(centerX + Math.cos(seedAngle) * baseRadius, margin, width - margin),
+        y: clamp(centerY + Math.sin(seedAngle) * baseRadius * 0.82, margin, height - margin)
+      };
+      let bestScore = -Infinity;
+
+      for (let ring = 0; ring < 7; ring++) {
+        const ringRadius = baseRadius + ringStep * ring;
+        const steps = 10 + ring * 6;
+
+        for (let step = 0; step < steps; step++) {
+          const angle = seedAngle + (step / steps) * Math.PI * 2 + ring * 0.24;
+          const candidateX = clamp(centerX + Math.cos(angle) * ringRadius, margin, width - margin);
+          const candidateY = clamp(centerY + Math.sin(angle) * ringRadius * 0.82, margin, height - margin);
+          let clearance = Infinity;
+
+          for (const item of occupiedItems) {
+            const dx = candidateX - item.x;
+            const dy = candidateY - item.y;
+            const itemRadius = item.kind === "map"
+              ? item.hitRadius
+              : item.hitRadius + 12;
+            const gap = Math.hypot(dx, dy) - (itemRadius + candidateRadius + 24);
+            clearance = Math.min(clearance, gap);
+          }
+
+          if (!occupiedItems.length) {
+            clearance = Infinity;
+          }
+
+          const distanceFromCenter = Math.hypot(candidateX - centerX, candidateY - centerY);
+          const score = clearance - distanceFromCenter * 0.04;
+
+          if (clearance > 18) {
+            return {
+              x: candidateX,
+              y: candidateY
+            };
+          }
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestCandidate = {
+              x: candidateX,
+              y: candidateY
+            };
+          }
+        }
+      }
+
+      return bestCandidate;
+    }
+
+    function findConstellationSpawnWorldPoint(map) {
+      const screenPoint = findConstellationSpawnScreenPoint(map);
+      return screenToConstellationWorld(
+        screenPoint.x,
+        screenPoint.y,
+        mapsCamera.zoom,
+        mapsCamera.x,
+        mapsCamera.y
+      );
+    }
+
     function getDefaultMapsViewState() {
       const orderedMaps = getOrderedMaps();
       if (!orderedMaps.length) {
@@ -2022,7 +2135,12 @@
       const orderedMaps = getOrderedMaps();
       if (!orderedMaps.length) return;
 
-      const activeIndex = Math.max(0, orderedMaps.findIndex(map => map.id === activeMapId));
+      const focusMapId = getConstellationFocusMapId();
+      if (focusMapId === null) return;
+
+      const activeIndex = orderedMaps.findIndex(map => map.id === focusMapId);
+      if (activeIndex < 0) return;
+
       const point = getConstellationMapWorldPoint(orderedMaps[activeIndex], activeIndex, orderedMaps.length);
 
       mapsCamera.targetX = point.x;
@@ -2038,7 +2156,12 @@
       const orderedMaps = getOrderedMaps();
       if (!mapsOverlayOpen || pendingDeleteMapId !== null || !orderedMaps.length) return false;
 
-      const activeIndex = Math.max(0, orderedMaps.findIndex(map => map.id === activeMapId));
+      const focusMapId = getConstellationFocusMapId();
+      if (focusMapId === null) return false;
+
+      const activeIndex = orderedMaps.findIndex(map => map.id === focusMapId);
+      if (activeIndex < 0) return false;
+
       const point = getConstellationMapWorldPoint(orderedMaps[activeIndex], activeIndex, orderedMaps.length);
       const dx = mapsCamera.x - point.x;
       const dy = mapsCamera.y - point.y;
@@ -2144,22 +2267,26 @@
       }
     }
 
-    function drawStarSpike(x, y, length, angle, color, alpha, lineWidth) {
-      const dx = Math.cos(angle) * length;
-      const dy = Math.sin(angle) * length;
-      const spike = mapsCtx.createLinearGradient(x - dx, y - dy, x + dx, y + dy);
-      spike.addColorStop(0, "rgba(0,0,0,0)");
-      spike.addColorStop(0.42, rgba(color, alpha * 0.2));
-      spike.addColorStop(0.5, `rgba(255, 255, 255, ${alpha})`);
-      spike.addColorStop(0.58, rgba(color, alpha * 0.2));
-      spike.addColorStop(1, "rgba(0,0,0,0)");
+    function drawStarFlareArm(x, y, length, thickness, angle, color, alpha, whiteAlpha = 0) {
+      mapsCtx.save();
+      mapsCtx.translate(x, y);
+      mapsCtx.rotate(angle);
+      mapsCtx.scale(length, thickness);
 
-      mapsCtx.strokeStyle = spike;
-      mapsCtx.lineWidth = lineWidth;
+      const flare = mapsCtx.createRadialGradient(0, 0, 0, 0, 0, 1);
+      flare.addColorStop(0, "rgba(0,0,0,0)");
+      flare.addColorStop(0.07, "rgba(0,0,0,0)");
+      flare.addColorStop(0.12, `rgba(255, 255, 255, ${whiteAlpha * 0.22})`);
+      flare.addColorStop(0.18, rgba(color, alpha * 0.72));
+      flare.addColorStop(0.3, rgba(color, alpha * 0.96));
+      flare.addColorStop(0.5, rgba(color, alpha * 0.24));
+      flare.addColorStop(1, "rgba(0,0,0,0)");
+
+      mapsCtx.fillStyle = flare;
       mapsCtx.beginPath();
-      mapsCtx.moveTo(x - dx, y - dy);
-      mapsCtx.lineTo(x + dx, y + dy);
-      mapsCtx.stroke();
+      mapsCtx.arc(0, 0, 1, 0, Math.PI * 2);
+      mapsCtx.fill();
+      mapsCtx.restore();
     }
 
     function drawConstellationMap(item, time, hovered) {
@@ -2172,73 +2299,100 @@
           (star.pulseScale + (item.isActive ? 0.006 : hovered ? 0.003 : 0));
       const coreRadius = radius * pulse;
       const auraRadius = coreRadius * star.auraScale * (item.isActive ? 1.1 : hovered ? 1.05 : 1);
-      const auraAlpha = star.auraAlpha * star.starLuminosity * (item.isActive ? 1.3 : hovered ? 1.14 : 1);
-      const bodyRadius = coreRadius * 1.45;
+      const auraAlpha = star.auraAlpha * star.starLuminosity * (item.isActive ? 1.42 : hovered ? 1.24 : 1.08);
+      const bodyRadius = coreRadius * 1.52;
+      const coronaRadius = coreRadius * 2.05;
+      const hotCoreColor = mixColor(star.coreColor, [255, 255, 255], 0.52);
+      const warmCoreColor = mixColor(star.coreColor, [255, 255, 255], 0.22);
+      const whiteCoreAlpha = Math.min(1, star.whiteCoreAlpha + (item.isActive ? 0.05 : hovered ? 0.025 : 0));
 
       const aura = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, auraRadius);
       aura.addColorStop(0, rgba(star.haloColor, auraAlpha));
-      aura.addColorStop(0.34, rgba(star.haloColor, auraAlpha * 0.42));
+      aura.addColorStop(0.28, rgba(star.haloColor, auraAlpha * 0.56));
+      aura.addColorStop(0.56, rgba(star.haloColor, auraAlpha * 0.14));
       aura.addColorStop(1, "rgba(0,0,0,0)");
       mapsCtx.fillStyle = aura;
       mapsCtx.beginPath();
       mapsCtx.arc(item.x, item.y, auraRadius, 0, Math.PI * 2);
       mapsCtx.fill();
 
+      const coronaGlow = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, coronaRadius);
+      coronaGlow.addColorStop(0, rgba(star.haloColor, auraAlpha * 0.5));
+      coronaGlow.addColorStop(0.18, rgba(star.haloColor, auraAlpha * 0.28));
+      coronaGlow.addColorStop(0.74, "rgba(0,0,0,0)");
+      mapsCtx.fillStyle = coronaGlow;
+      mapsCtx.beginPath();
+      mapsCtx.arc(item.x, item.y, coronaRadius, 0, Math.PI * 2);
+      mapsCtx.fill();
+
       const bodyGlow = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, bodyRadius);
-      bodyGlow.addColorStop(0, rgba(star.coreColor, star.bodyAlpha * 0.95));
-      bodyGlow.addColorStop(0.4, rgba(star.coreColor, star.bodyAlpha * 0.46));
+      bodyGlow.addColorStop(0, rgba(hotCoreColor, star.bodyAlpha * 0.98));
+      bodyGlow.addColorStop(0.22, rgba(warmCoreColor, star.bodyAlpha * 0.8));
+      bodyGlow.addColorStop(0.48, rgba(star.coreColor, star.bodyAlpha * 0.52));
       bodyGlow.addColorStop(1, "rgba(0,0,0,0)");
       mapsCtx.fillStyle = bodyGlow;
       mapsCtx.beginPath();
       mapsCtx.arc(item.x, item.y, bodyRadius, 0, Math.PI * 2);
       mapsCtx.fill();
 
-      const innerGlow = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, coreRadius * 1.18);
-      innerGlow.addColorStop(0, rgba(star.coreColor, star.bodyAlpha * 0.62));
-      innerGlow.addColorStop(0.72, rgba(star.coreColor, star.bodyAlpha * 0.12));
-      innerGlow.addColorStop(1, "rgba(0,0,0,0)");
-      mapsCtx.fillStyle = innerGlow;
+      const stellarCore = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, coreRadius * 1.08);
+      stellarCore.addColorStop(0, `rgba(255, 255, 255, ${whiteCoreAlpha})`);
+      stellarCore.addColorStop(0.1, `rgba(255, 255, 255, ${whiteCoreAlpha * 0.92})`);
+      stellarCore.addColorStop(0.24, rgba(hotCoreColor, 0.96));
+      stellarCore.addColorStop(0.46, rgba(warmCoreColor, 0.88));
+      stellarCore.addColorStop(0.72, rgba(star.coreColor, star.bodyAlpha * 0.74));
+      stellarCore.addColorStop(1, "rgba(0,0,0,0)");
+      mapsCtx.fillStyle = stellarCore;
       mapsCtx.beginPath();
-      mapsCtx.arc(item.x, item.y, coreRadius * 1.18, 0, Math.PI * 2);
+      mapsCtx.arc(item.x, item.y, coreRadius * 1.08, 0, Math.PI * 2);
       mapsCtx.fill();
 
-      const spikeAlpha = star.spikeAlpha * star.starLuminosity * (item.isActive ? 1.14 : hovered ? 1.06 : 1);
-      const spikeLength = coreRadius * star.spikeLength * (item.isActive ? 1.08 : hovered ? 1.03 : 1);
-      drawStarSpike(item.x, item.y, spikeLength, Math.PI / 2, star.haloColor, spikeAlpha, 1.18);
-      drawStarSpike(item.x, item.y, spikeLength * 0.76, 0, star.haloColor, spikeAlpha * 0.88, 0.96);
+      const spikeAlpha = star.spikeAlpha * star.starLuminosity * (item.isActive ? 1.24 : hovered ? 1.12 : 1);
+      const spikeLength = coreRadius * star.spikeLength * (item.isActive ? 1.1 : hovered ? 1.05 : 1);
+      const verticalThickness = coreRadius * 0.095;
+      const horizontalThickness = coreRadius * 0.068;
+
+      mapsCtx.save();
+      mapsCtx.globalCompositeOperation = "lighter";
+
+      drawStarFlareArm(item.x, item.y, spikeLength * 1.06, verticalThickness * 2.8, Math.PI / 2, star.haloColor, spikeAlpha * 0.2, 0);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.86, verticalThickness * 1.38, Math.PI / 2, star.haloColor, spikeAlpha * 0.46, 0.08);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.42, verticalThickness * 0.34, Math.PI / 2, hotCoreColor, spikeAlpha * 0.58, spikeAlpha * 0.84);
+
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.88, horizontalThickness * 2.3, 0, star.haloColor, spikeAlpha * 0.16, 0);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.72, horizontalThickness * 1.16, 0, star.haloColor, spikeAlpha * 0.36, 0.05);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.34, horizontalThickness * 0.3, 0, hotCoreColor, spikeAlpha * 0.44, spikeAlpha * 0.66);
 
       if (star.starType === "blue" || star.starVariant === "giant" || item.isActive) {
-        drawStarSpike(item.x, item.y, spikeLength * 0.42, Math.PI / 4, star.haloColor, spikeAlpha * 0.32, 0.8);
-        drawStarSpike(item.x, item.y, spikeLength * 0.32, -Math.PI / 4, star.haloColor, spikeAlpha * 0.22, 0.7);
+        drawStarFlareArm(item.x, item.y, spikeLength * 0.32, coreRadius * 0.04, Math.PI / 4, star.haloColor, spikeAlpha * 0.16, 0.03);
+        drawStarFlareArm(item.x, item.y, spikeLength * 0.24, coreRadius * 0.034, -Math.PI / 4, star.haloColor, spikeAlpha * 0.1, 0.02);
       }
 
-      mapsCtx.beginPath();
-      mapsCtx.arc(item.x, item.y, coreRadius * 0.72, 0, Math.PI * 2);
-      mapsCtx.fillStyle = rgba(star.coreColor, 0.84 + (item.isActive ? 0.06 : hovered ? 0.03 : 0));
-      mapsCtx.fill();
+      mapsCtx.restore();
 
       const whiteCoreRadius = coreRadius * star.whiteCoreScale;
-      const whiteCoreGlow = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, coreRadius * 0.92);
-      whiteCoreGlow.addColorStop(0, `rgba(255, 255, 255, ${star.whiteCoreAlpha})`);
-      whiteCoreGlow.addColorStop(0.38, `rgba(255, 255, 255, ${star.whiteCoreAlpha * 0.34})`);
+      const whiteCoreGlow = mapsCtx.createRadialGradient(item.x, item.y, 0, item.x, item.y, coreRadius * 0.96);
+      whiteCoreGlow.addColorStop(0, `rgba(255, 255, 255, ${whiteCoreAlpha})`);
+      whiteCoreGlow.addColorStop(0.24, `rgba(255, 255, 255, ${whiteCoreAlpha * 0.72})`);
+      whiteCoreGlow.addColorStop(0.46, rgba(hotCoreColor, 0.26));
       whiteCoreGlow.addColorStop(1, "rgba(255,255,255,0)");
       mapsCtx.fillStyle = whiteCoreGlow;
       mapsCtx.beginPath();
-      mapsCtx.arc(item.x, item.y, coreRadius * 0.92, 0, Math.PI * 2);
+      mapsCtx.arc(item.x, item.y, coreRadius * 0.96, 0, Math.PI * 2);
       mapsCtx.fill();
 
       mapsCtx.beginPath();
       mapsCtx.arc(item.x, item.y, whiteCoreRadius, 0, Math.PI * 2);
-      mapsCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, star.whiteCoreAlpha + (item.isActive ? 0.04 : 0))})`;
+      mapsCtx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, whiteCoreAlpha + 0.02)})`;
       mapsCtx.fill();
 
       mapsCtx.beginPath();
-      mapsCtx.arc(item.x, item.y, coreRadius + 1.6, 0, Math.PI * 2);
+      mapsCtx.arc(item.x, item.y, coreRadius + 1.2, 0, Math.PI * 2);
       mapsCtx.strokeStyle = rgba(
         star.outlineColor,
-        star.outlineAlpha * (item.isActive ? 1.35 : hovered ? 1.12 : 1)
+        star.outlineAlpha * (item.isActive ? 1.18 : hovered ? 1.06 : 0.92)
       );
-      mapsCtx.lineWidth = 0.9;
+      mapsCtx.lineWidth = 0.8;
       mapsCtx.stroke();
     }
 
@@ -2307,6 +2461,7 @@
 
       const items = [];
       const visualScale = getConstellationVisualScale();
+      const selectedMapId = getConstellationFocusMapId();
 
       for (let index = 0; index < orderedMaps.length; index++) {
         const map = orderedMaps[index];
@@ -2320,7 +2475,7 @@
           ? overlayDraggedMapDriftY
           : Math.cos(time * 0.00022 + map.id * 1.1) * 8;
         const point = projectConstellationPoint(worldPoint.x + driftX, worldPoint.y + driftY);
-        const isActive = map.id === activeMapId;
+        const isActive = selectedMapId !== null && map.id === selectedMapId;
         const radius = clamp(
           summary.visualRadius * star.starScale * (isActive ? 1.16 : 1) * visualScale,
           14,
@@ -2873,7 +3028,10 @@
       const target = resolveConstellationTarget(x, y);
 
       if (!target) {
-        closeMapsOverlay();
+        overlaySelectedMapId = null;
+        hoveredMapId = null;
+        clearMapsLabel();
+        updateMapsCenterButton();
         return;
       }
 
