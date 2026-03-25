@@ -575,6 +575,8 @@
     let workspaceLoaded = false;
     let mapsOverlayOpen = false;
     let constellationItems = [];
+    const constellationSummaryCache = new Map();
+    const constellationStarProfileCache = new Map();
     let hoveredMapId = null;
     let overlaySelectedMapId = null;
     let overlayCreateState = null;
@@ -883,14 +885,35 @@
       return readStoredStarIdentity(rawMap) || createRandomStarIdentity();
     }
 
+    function invalidateConstellationVisualCaches(mapId = null) {
+      if (mapId === null) {
+        constellationSummaryCache.clear();
+        constellationStarProfileCache.clear();
+        return;
+      }
+
+      constellationSummaryCache.delete(mapId);
+      constellationStarProfileCache.delete(mapId);
+    }
+
     function getMapStarProfile(map) {
+      const cached = constellationStarProfileCache.get(map.id);
+      if (cached && cached.mapRef === map) {
+        return cached.profile;
+      }
+
       const identity = sanitizeStarIdentity(map);
       const template = getStarTypeTemplate(identity.starType, identity.starVariant);
-
-      return {
+      const profile = {
         ...identity,
         ...template
       };
+
+      constellationStarProfileCache.set(map.id, {
+        mapRef: map,
+        profile
+      });
+      return profile;
     }
 
     function allocateMapId() {
@@ -1141,6 +1164,7 @@
       const index = getActiveMapIndex();
       if (index < 0) return;
       maps[index] = serializeCurrentMap(activeMapId);
+      invalidateConstellationVisualCaches(activeMapId);
     }
 
     function sanitizeConstellationPosition(rawPosition) {
@@ -1340,6 +1364,7 @@
         : overlaySelectedMapId;
 
       maps = maps.filter(existingMap => existingMap.id !== mapId);
+      invalidateConstellationVisualCaches(mapId);
       hoveredMapId = null;
       overlaySelectedMapId = nextSelectedId;
       closeDeleteConfirmation();
@@ -1504,6 +1529,7 @@
         y: worldPoint.y
       };
       maps.push(freshMap);
+      invalidateConstellationVisualCaches(freshMap.id);
       overlaySelectedMapId = freshMap.id;
       hoveredMapId = freshMap.id;
       cancelOverlayCreateMode();
@@ -2410,13 +2436,18 @@
     }
 
     function summarizeMap(map, fallbackIndex = 0) {
+      const cached = constellationSummaryCache.get(map.id);
+      if (cached && cached.mapRef === map && cached.fallbackIndex === fallbackIndex) {
+        return cached.summary;
+      }
+
       const centerNode = getMapCenterNode(map);
       const nodeCount = Math.max(1, map.nodes.length);
       const branchCount = centerNode
         ? map.nodes.filter(node => node.parentId === centerNode.id).length
         : 0;
 
-      return {
+      const summary = {
         name: getMapName(map, fallbackIndex),
         nodeCount,
         branchCount,
@@ -2424,11 +2455,19 @@
         visualRadius: clamp(14 + Math.sqrt(nodeCount) * 2.2 + branchCount * 0.75, 17, 32),
         seed: map.id * 0.61803398875
       };
+
+      constellationSummaryCache.set(map.id, {
+        mapRef: map,
+        fallbackIndex,
+        summary
+      });
+      return summary;
     }
 
     function getConstellationItemAt(x, y) {
       for (let i = constellationItems.length - 1; i >= 0; i--) {
         const item = constellationItems[i];
+        if (item.kind === "map" && item.isVisible === false) continue;
         const dx = x - item.x;
         const dy = y - item.y;
         if (dx * dx + dy * dy <= item.hitRadius * item.hitRadius) {
@@ -3299,6 +3338,12 @@
           14,
           star.starVariant === "giant" ? 78 : 58
         );
+        const renderPadding = Math.max(180, radius * 6.4);
+        const isVisible =
+          point.x + renderPadding >= 0 &&
+          point.x - renderPadding <= width &&
+          point.y + renderPadding >= 0 &&
+          point.y - renderPadding <= height;
 
         items.push({
           kind: "map",
@@ -3314,7 +3359,8 @@
           driftY,
           radius,
           hitRadius: clamp(radius + 18, 30, star.starVariant === "giant" ? 102 : 74),
-          isActive
+          isActive,
+          isVisible
         });
       }
 
@@ -3391,7 +3437,7 @@
         const hovered = hoveredItem === item;
         if (item.kind === "new") {
           drawConstellationPlus(item, hovered);
-        } else {
+        } else if (item.isVisible !== false) {
           drawConstellationMap(item, time, hovered);
         }
       }
@@ -3533,6 +3579,7 @@
 
     function restoreWorkspace(restoredMaps, nextActiveMapId, nextMapIdCounter, nextMapsViewState = null, shouldResave = false) {
       maps = restoredMaps;
+      invalidateConstellationVisualCaches();
       mapIdCounter = Math.max(nextMapIdCounter, ...maps.map(map => map.id));
       activeMapId = maps.some(map => map.id === nextActiveMapId) ? nextActiveMapId : maps[0].id;
 
