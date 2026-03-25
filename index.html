@@ -1816,7 +1816,7 @@
       let bloomAlphaBoost = 0;
       let accentLevel = 0;
 
-      if (accentRoll > lerp(0.9984, 0.968, nearFactor)) {
+      if (accentRoll > lerp(0.9994, 0.982, nearFactor)) {
         accentLevel = 3;
       } else if (accentRoll > lerp(0.978, 0.85, nearFactor)) {
         accentLevel = 2;
@@ -1831,11 +1831,11 @@
       }
 
       if (accentLevel === 3) {
-        brightnessBoost = Math.max(brightnessBoost, lerp(4.6, 7.5 + nearFactor * 0.72, accentSeed));
-        glowRadiusBoost = lerp(4.4, 7.4 + nearFactor * 0.64, sizeRoll);
-        coreRadiusBoost = lerp(1.38, 2.04 + nearFactor * 0.14, coreSizeRoll);
-        bloomRadiusBoost = lerp(3.5, 5.9 + nearFactor * 0.56, bloomRoll);
-        bloomAlphaBoost = lerp(0.4, 0.68 + nearFactor * 0.08, hash01(seed * 41.8));
+        brightnessBoost = Math.max(brightnessBoost, lerp(3.4, 5.3 + nearFactor * 0.4, accentSeed));
+        glowRadiusBoost = lerp(3.2, 5.1 + nearFactor * 0.34, sizeRoll);
+        coreRadiusBoost = lerp(1.22, 1.72 + nearFactor * 0.08, coreSizeRoll);
+        bloomRadiusBoost = lerp(2.4, 4 + nearFactor * 0.24, bloomRoll);
+        bloomAlphaBoost = lerp(0.24, 0.42 + nearFactor * 0.04, hash01(seed * 41.8));
       } else if (accentLevel === 2) {
         brightnessBoost = Math.max(brightnessBoost, lerp(2.6, 4.4 + nearFactor * 0.42, accentSeed));
         glowRadiusBoost = lerp(2.6, 4.6 + nearFactor * 0.34, sizeRoll);
