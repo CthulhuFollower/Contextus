@@ -616,6 +616,8 @@
     const MAPS_ZOOM_MIN = 0.08;
     const MAPS_ZOOM_MAX = 18;
     const MAPS_ENTER_DURATION = 1280;
+    const UNIVERSE_BACKDROP_TILE_SIZE = 960;
+    const UNIVERSE_BACKDROP_REFERENCE_AREA = 2100 * 1260;
     const STAR_TYPE_WEIGHTS = [
       { type: "yellow", weight: 36 },
       { type: "orange", weight: 28 },
@@ -692,6 +694,10 @@
         pulseScale: 0.013,
         orbitSpeed: 0.88
       }
+    };
+    const universeBackdropCache = {
+      d0: null,
+      d1: null
     };
 
     function resize() {
@@ -1766,44 +1772,436 @@
       }
     }
 
-    function drawUniverseBackdrop(renderCtx, viewCamera, time) {
+    function getBackgroundStarColors(seed, layerDepth = 0.5) {
+      const weightedFamilies = [
+        { weight: 40, family: "white_cold" },
+        { weight: 25, family: "blue_white" },
+        { weight: 15, family: "yellow_white" },
+        { weight: 10, family: "orange" },
+        { weight: 10, family: "red" }
+      ];
+      const totalWeight = weightedFamilies.reduce((sum, entry) => sum + entry.weight, 0);
+      let roll = hash01(seed * 4.91) * totalWeight;
+      let selectedFamily = weightedFamilies[0].family;
+
+      for (const entry of weightedFamilies) {
+        roll -= entry.weight;
+        if (roll <= 0) {
+          selectedFamily = entry.family;
+          break;
+        }
+      }
+
+      const whitePoint = [248, 250, 252];
+      const nearFactor = clamp(layerDepth, 0, 1);
+      const variant = hash01(seed * 7.3);
+      const intenseRoll = hash01(seed * 11.7);
+      const intenseThreshold = lerp(0.995, 0.9, nearFactor);
+      const intenseVariant = intenseRoll > intenseThreshold;
+      const intensityRoll = hash01(seed * 17.1);
+      const brightnessRoll = hash01(seed * 19.9);
+      const accentRoll = hash01(seed * 27.7);
+      const accentSeed = hash01(seed * 31.4);
+      const sizeRoll = hash01(seed * 33.2);
+      const coreSizeRoll = hash01(seed * 35.8);
+      const bloomRoll = hash01(seed * 39.6);
+      let coreBase;
+      let glowBase;
+      let glowAlphaBoost = 1;
+      let coreAlphaBoost = 1;
+      let brightnessBoost = lerp(0.42, 1.34 + nearFactor * 0.24, brightnessRoll);
+      let glowRadiusBoost = lerp(0.56, 1.58 + nearFactor * 0.34, sizeRoll);
+      let coreRadiusBoost = lerp(0.72, 1.22 + nearFactor * 0.18, coreSizeRoll);
+      let bloomRadiusBoost = 0;
+      let bloomAlphaBoost = 0;
+      let accentLevel = 0;
+
+      if (accentRoll > lerp(0.9984, 0.968, nearFactor)) {
+        accentLevel = 3;
+      } else if (accentRoll > lerp(0.978, 0.85, nearFactor)) {
+        accentLevel = 2;
+      } else if (accentRoll > lerp(0.82, 0.5, nearFactor)) {
+        accentLevel = 1;
+      }
+
+      if (brightnessRoll > lerp(0.988, 0.89, nearFactor)) {
+        brightnessBoost = lerp(1.48, 2.28 + nearFactor * 0.34, hash01(seed * 23.4));
+      } else if (brightnessRoll > lerp(0.9, 0.64, nearFactor)) {
+        brightnessBoost = lerp(1.12, 1.74 + nearFactor * 0.18, hash01(seed * 21.2));
+      }
+
+      if (accentLevel === 3) {
+        brightnessBoost = Math.max(brightnessBoost, lerp(4.6, 7.5 + nearFactor * 0.72, accentSeed));
+        glowRadiusBoost = lerp(4.4, 7.4 + nearFactor * 0.64, sizeRoll);
+        coreRadiusBoost = lerp(1.38, 2.04 + nearFactor * 0.14, coreSizeRoll);
+        bloomRadiusBoost = lerp(3.5, 5.9 + nearFactor * 0.56, bloomRoll);
+        bloomAlphaBoost = lerp(0.4, 0.68 + nearFactor * 0.08, hash01(seed * 41.8));
+      } else if (accentLevel === 2) {
+        brightnessBoost = Math.max(brightnessBoost, lerp(2.6, 4.4 + nearFactor * 0.42, accentSeed));
+        glowRadiusBoost = lerp(2.6, 4.6 + nearFactor * 0.34, sizeRoll);
+        coreRadiusBoost = lerp(1.12, 1.58 + nearFactor * 0.08, coreSizeRoll);
+        bloomRadiusBoost = lerp(2.1, 3.6 + nearFactor * 0.22, bloomRoll);
+        bloomAlphaBoost = lerp(0.22, 0.4 + nearFactor * 0.06, hash01(seed * 41.8));
+      } else if (accentLevel === 1) {
+        brightnessBoost = Math.max(brightnessBoost, lerp(1.3, 2.26 + nearFactor * 0.16, accentSeed));
+        glowRadiusBoost = lerp(1.36, 2.42 + nearFactor * 0.16, sizeRoll);
+        coreRadiusBoost = lerp(0.98, 1.32 + nearFactor * 0.04, coreSizeRoll);
+        bloomRadiusBoost = lerp(1.06, 1.84 + nearFactor * 0.08, bloomRoll);
+        bloomAlphaBoost = lerp(0.06, 0.14 + nearFactor * 0.02, hash01(seed * 41.8));
+      }
+
+      if (selectedFamily === "blue_white") {
+        coreBase = mixColor([230, 239, 255], [186, 217, 255], variant);
+        glowBase = mixColor([154, 194, 255], [58, 136, 255], variant);
+        glowAlphaBoost = lerp(1.12, 1.34, intensityRoll) + nearFactor * 0.12;
+        coreAlphaBoost = lerp(1.02, 1.12, intensityRoll);
+        if (intenseVariant) {
+          glowBase = mixColor(glowBase, [38, 112, 255], 0.42 + nearFactor * 0.28);
+          glowAlphaBoost += 0.12;
+        }
+        if (accentLevel > 0) {
+          const accentMix =
+            accentLevel === 3 ? 0.76 + nearFactor * 0.28 :
+            accentLevel === 2 ? 0.58 + nearFactor * 0.26 :
+            0.28 + nearFactor * 0.12;
+          glowBase = mixColor(glowBase, [34, 106, 255], accentMix);
+          glowAlphaBoost += accentLevel === 3 ? 0.62 : accentLevel === 2 ? 0.34 : 0.16;
+        }
+      } else if (selectedFamily === "yellow_white") {
+        coreBase = mixColor([255, 246, 222], [255, 232, 184], variant);
+        glowBase = mixColor([255, 224, 162], [255, 192, 98], variant);
+        glowAlphaBoost = lerp(1.08, 1.24, intensityRoll) + nearFactor * 0.08;
+        coreAlphaBoost = lerp(1.01, 1.08, intensityRoll);
+        if (intenseVariant) {
+          glowBase = mixColor(glowBase, [255, 206, 84], 0.32 + nearFactor * 0.24);
+          glowAlphaBoost += 0.08;
+        }
+        if (accentLevel > 0) {
+          const accentMix =
+            accentLevel === 3 ? 0.72 + nearFactor * 0.22 :
+            accentLevel === 2 ? 0.5 + nearFactor * 0.2 :
+            0.24 + nearFactor * 0.1;
+          glowBase = mixColor(glowBase, [255, 202, 58], accentMix);
+          glowAlphaBoost += accentLevel === 3 ? 0.48 : accentLevel === 2 ? 0.26 : 0.12;
+        }
+      } else if (selectedFamily === "orange") {
+        coreBase = mixColor([255, 228, 194], [255, 204, 148], variant);
+        glowBase = mixColor([255, 186, 114], [255, 132, 42], variant);
+        glowAlphaBoost = lerp(1.12, 1.3, intensityRoll) + nearFactor * 0.1;
+        coreAlphaBoost = lerp(1.02, 1.1, intensityRoll);
+        if (intenseVariant) {
+          glowBase = mixColor(glowBase, [255, 110, 24], 0.36 + nearFactor * 0.24);
+          glowAlphaBoost += 0.1;
+        }
+        if (accentLevel > 0) {
+          const accentMix =
+            accentLevel === 3 ? 0.76 + nearFactor * 0.24 :
+            accentLevel === 2 ? 0.56 + nearFactor * 0.22 :
+            0.28 + nearFactor * 0.12;
+          glowBase = mixColor(glowBase, [255, 102, 12], accentMix);
+          glowAlphaBoost += accentLevel === 3 ? 0.54 : accentLevel === 2 ? 0.3 : 0.14;
+        }
+      } else if (selectedFamily === "red") {
+        coreBase = mixColor([255, 214, 206], [255, 186, 172], variant);
+        glowBase = mixColor([246, 138, 124], [232, 78, 66], variant);
+        glowAlphaBoost = lerp(1.14, 1.32, intensityRoll) + nearFactor * 0.1;
+        coreAlphaBoost = lerp(1.02, 1.12, intensityRoll);
+        if (intenseVariant) {
+          glowBase = mixColor(glowBase, [255, 64, 54], 0.34 + nearFactor * 0.28);
+          glowAlphaBoost += 0.12;
+        }
+        if (accentLevel > 0) {
+          const accentMix =
+            accentLevel === 3 ? 0.78 + nearFactor * 0.24 :
+            accentLevel === 2 ? 0.54 + nearFactor * 0.26 :
+            0.24 + nearFactor * 0.12;
+          glowBase = mixColor(glowBase, [255, 48, 36], accentMix);
+          glowAlphaBoost += accentLevel === 3 ? 0.58 : accentLevel === 2 ? 0.32 : 0.14;
+        }
+      } else {
+        coreBase = mixColor([248, 250, 255], [228, 241, 255], variant);
+        glowBase = mixColor([228, 238, 252], [178, 210, 255], variant);
+        glowAlphaBoost = lerp(1.02, 1.12, intensityRoll) + nearFactor * 0.04;
+        coreAlphaBoost = lerp(1, 1.06, intensityRoll);
+        if (intenseVariant) {
+          glowBase = mixColor(glowBase, [158, 198, 255], 0.24 + nearFactor * 0.16);
+          glowAlphaBoost += 0.05;
+        }
+        if (accentLevel > 0) {
+          const accentMix =
+            accentLevel === 3 ? 0.42 + nearFactor * 0.18 :
+            accentLevel === 2 ? 0.3 + nearFactor * 0.14 :
+            0.14 + nearFactor * 0.06;
+          glowBase = mixColor(glowBase, [146, 194, 255], accentMix);
+          glowAlphaBoost += accentLevel === 3 ? 0.22 : accentLevel === 2 ? 0.12 : 0.06;
+        }
+      }
+
+      const accentCoreWhitenDrop = accentLevel === 3 ? 0.28 : accentLevel === 2 ? 0.18 : accentLevel === 1 ? 0.08 : 0;
+      const accentGlowWhitenDrop = accentLevel === 3 ? 0.24 : accentLevel === 2 ? 0.14 : accentLevel === 1 ? 0.06 : 0;
+      const coreWhiten = clamp(0.34 - nearFactor * 0.18 - (intenseVariant ? 0.08 : 0) - accentCoreWhitenDrop, 0, 0.48);
+      const glowWhiten = clamp(0.12 - nearFactor * 0.08 - (intenseVariant ? 0.08 : 0) - accentGlowWhitenDrop, 0, 0.22);
+
+      return {
+        core: mixColor(coreBase, whitePoint, coreWhiten),
+        glow: mixColor(glowBase, coreBase, glowWhiten),
+        glowAlphaBoost,
+        coreAlphaBoost,
+        brightnessBoost,
+        glowRadiusBoost,
+        coreRadiusBoost,
+        bloomRadiusBoost,
+        bloomAlphaBoost
+      };
+    }
+
+    function getUniverseBackdropLayers(mode = "d0") {
+      if (mode === "d1") {
+        return [
+          {
+            count: 288,
+            parallaxMin: 0.024,
+            parallaxRange: 0.034,
+            driftX: 0.7,
+            driftY: 0.56,
+            glowRadiusMin: 1.35,
+            glowRadiusRange: 2.7,
+            coreRadiusMin: 0.18,
+            coreRadiusRange: 0.56,
+            glowAlphaMin: 0.006,
+            glowAlphaRange: 0.016,
+            coreAlphaMin: 0.055,
+            coreAlphaRange: 0.1,
+            spreadX: 4.8,
+            spreadY: 4.1,
+            offsetX: 2.4,
+            offsetY: 2.05
+          },
+          {
+            count: 228,
+            parallaxMin: 0.05,
+            parallaxRange: 0.08,
+            driftX: 1.2,
+            driftY: 1,
+            glowRadiusMin: 1.8,
+            glowRadiusRange: 3.8,
+            coreRadiusMin: 0.22,
+            coreRadiusRange: 0.82,
+            glowAlphaMin: 0.012,
+            glowAlphaRange: 0.026,
+            coreAlphaMin: 0.09,
+            coreAlphaRange: 0.16,
+            spreadX: 4.2,
+            spreadY: 3.6,
+            offsetX: 2.1,
+            offsetY: 1.8
+          },
+          {
+            count: 108,
+            parallaxMin: 0.11,
+            parallaxRange: 0.08,
+            driftX: 1.7,
+            driftY: 1.45,
+            glowRadiusMin: 2.3,
+            glowRadiusRange: 4.7,
+            coreRadiusMin: 0.28,
+            coreRadiusRange: 1.02,
+            glowAlphaMin: 0.018,
+            glowAlphaRange: 0.034,
+            coreAlphaMin: 0.12,
+            coreAlphaRange: 0.22,
+            spreadX: 3.6,
+            spreadY: 3.2,
+            offsetX: 1.8,
+            offsetY: 1.6
+          },
+          {
+            count: 34,
+            parallaxMin: 0.18,
+            parallaxRange: 0.11,
+            driftX: 2.1,
+            driftY: 1.85,
+            glowRadiusMin: 2.8,
+            glowRadiusRange: 5.4,
+            coreRadiusMin: 0.34,
+            coreRadiusRange: 1.18,
+            glowAlphaMin: 0.022,
+            glowAlphaRange: 0.038,
+            coreAlphaMin: 0.16,
+            coreAlphaRange: 0.28,
+            spreadX: 3.2,
+            spreadY: 2.8,
+            offsetX: 1.6,
+            offsetY: 1.4
+          },
+          {
+            count: 16,
+            parallaxMin: 0.28,
+            parallaxRange: 0.09,
+            driftX: 2.5,
+            driftY: 2.2,
+            glowRadiusMin: 3.3,
+            glowRadiusRange: 6.1,
+            coreRadiusMin: 0.42,
+            coreRadiusRange: 1.28,
+            glowAlphaMin: 0.026,
+            glowAlphaRange: 0.046,
+            coreAlphaMin: 0.19,
+            coreAlphaRange: 0.3,
+            spreadX: 2.9,
+            spreadY: 2.5,
+            offsetX: 1.45,
+            offsetY: 1.28
+          }
+        ];
+      }
+
+      return [
+        {
+          count: 112,
+          parallaxMin: 0.08,
+          parallaxRange: 0.1,
+          driftX: 1.5,
+          driftY: 1.2,
+          glowRadiusMin: 2.2,
+          glowRadiusRange: 4.4,
+          coreRadiusMin: 0.28,
+          coreRadiusRange: 1.02,
+          glowAlphaMin: 0.018,
+          glowAlphaRange: 0.034,
+          coreAlphaMin: 0.12,
+          coreAlphaRange: 0.22,
+          spreadX: 3.5,
+          spreadY: 3.1,
+          offsetX: 1.75,
+          offsetY: 1.55
+        },
+        {
+          count: 34,
+          parallaxMin: 0.16,
+          parallaxRange: 0.1,
+          driftX: 1.9,
+          driftY: 1.6,
+          glowRadiusMin: 2.8,
+          glowRadiusRange: 5.2,
+          coreRadiusMin: 0.34,
+          coreRadiusRange: 1.16,
+          glowAlphaMin: 0.022,
+          glowAlphaRange: 0.038,
+          coreAlphaMin: 0.15,
+          coreAlphaRange: 0.26,
+          spreadX: 3.1,
+          spreadY: 2.8,
+          offsetX: 1.55,
+          offsetY: 1.4
+        }
+      ];
+    }
+
+    function getUniverseBackdropLayerTileCount(layer) {
+      return Math.max(
+        6,
+        Math.round((layer.count * UNIVERSE_BACKDROP_TILE_SIZE * UNIVERSE_BACKDROP_TILE_SIZE) / UNIVERSE_BACKDROP_REFERENCE_AREA)
+      );
+    }
+
+    function createUniverseBackdropLayerCanvas(mode, layer, layerIndex, totalLayers) {
+      const layerCanvas = document.createElement("canvas");
+      layerCanvas.width = UNIVERSE_BACKDROP_TILE_SIZE;
+      layerCanvas.height = UNIVERSE_BACKDROP_TILE_SIZE;
+      const layerCtx = layerCanvas.getContext("2d");
+      const starCount = getUniverseBackdropLayerTileCount(layer);
+      const modeOffset = mode === "d1" ? 1000 : 0;
+      const layerDepth = totalLayers <= 1 ? 1 : layerIndex / (totalLayers - 1);
+
+      for (let i = 0; i < starCount; i++) {
+        const seed = modeOffset + layerIndex * 10000 + i + 1;
+        const x = hash01(seed * 3.7) * UNIVERSE_BACKDROP_TILE_SIZE;
+        const y = hash01(seed * 8.9 + 14) * UNIVERSE_BACKDROP_TILE_SIZE;
+        const glowRadius = layer.glowRadiusMin + hash01(seed * 5.1) * layer.glowRadiusRange;
+        const coreRadius = layer.coreRadiusMin + hash01(seed * 6.8) * layer.coreRadiusRange;
+        const glowAlpha = layer.glowAlphaMin + hash01(seed * 4.2) * layer.glowAlphaRange;
+        const coreAlpha = layer.coreAlphaMin + hash01(seed * 9.4) * layer.coreAlphaRange;
+        const colors = getBackgroundStarColors(seed, layerDepth);
+        const finalGlowRadius = glowRadius * colors.glowRadiusBoost;
+        const finalCoreRadius = coreRadius * colors.coreRadiusBoost;
+        const finalGlowAlpha = clamp(glowAlpha * colors.glowAlphaBoost * colors.brightnessBoost, 0, 0.94);
+        const finalCoreAlpha = clamp(coreAlpha * colors.coreAlphaBoost * colors.brightnessBoost, 0, 1);
+        const finalBloomRadius = finalGlowRadius * colors.bloomRadiusBoost;
+        const finalBloomAlpha = clamp(finalGlowAlpha * colors.bloomAlphaBoost, 0, 0.62);
+
+        if (finalBloomRadius > 0.01 && finalBloomAlpha > 0.002) {
+          const bloom = layerCtx.createRadialGradient(x, y, 0, x, y, finalBloomRadius);
+          bloom.addColorStop(0, rgba(colors.glow, finalBloomAlpha));
+          bloom.addColorStop(1, "rgba(0,0,0,0)");
+          layerCtx.fillStyle = bloom;
+          layerCtx.beginPath();
+          layerCtx.arc(x, y, finalBloomRadius, 0, Math.PI * 2);
+          layerCtx.fill();
+        }
+
+        const glow = layerCtx.createRadialGradient(x, y, 0, x, y, finalGlowRadius);
+        glow.addColorStop(0, rgba(colors.glow, finalGlowAlpha));
+        glow.addColorStop(1, "rgba(0,0,0,0)");
+        layerCtx.fillStyle = glow;
+        layerCtx.beginPath();
+        layerCtx.arc(x, y, finalGlowRadius, 0, Math.PI * 2);
+        layerCtx.fill();
+
+        layerCtx.beginPath();
+        layerCtx.arc(x, y, finalCoreRadius, 0, Math.PI * 2);
+        layerCtx.fillStyle = rgba(colors.core, finalCoreAlpha);
+        layerCtx.fill();
+      }
+
+      return {
+        canvas: layerCanvas,
+        parallax: layer.parallaxMin + layer.parallaxRange * 0.5,
+        driftX: layer.driftX,
+        driftY: layer.driftY,
+        seed: modeOffset + layerIndex * 10000 + 1
+      };
+    }
+
+    function ensureUniverseBackdropCache(mode = "d0") {
+      if (universeBackdropCache[mode]) return universeBackdropCache[mode];
+
+      const layerDefinitions = getUniverseBackdropLayers(mode);
+      const layers = layerDefinitions.map((layer, index) =>
+        createUniverseBackdropLayerCanvas(mode, layer, index, layerDefinitions.length)
+      );
+      universeBackdropCache[mode] = {
+        tileSize: UNIVERSE_BACKDROP_TILE_SIZE,
+        layers
+      };
+      return universeBackdropCache[mode];
+    }
+
+    function drawUniverseBackdropLayer(renderCtx, layer, viewCamera, time, tileSize) {
+      const driftX = Math.sin(time * 0.00012 + layer.seed * 0.00024) * layer.driftX;
+      const driftY = Math.cos(time * 0.0001 + layer.seed * 0.00017) * layer.driftY;
+      const offsetX = -wrap(-viewCamera.x * layer.parallax + driftX, tileSize);
+      const offsetY = -wrap(-viewCamera.y * layer.parallax + driftY, tileSize);
+
+      for (let x = offsetX; x < width; x += tileSize) {
+        for (let y = offsetY; y < height; y += tileSize) {
+          renderCtx.drawImage(layer.canvas, x, y, tileSize, tileSize);
+        }
+      }
+    }
+
+    function drawUniverseBackdrop(renderCtx, viewCamera, time, mode = "d0") {
       renderCtx.fillStyle = "#000000";
       renderCtx.fillRect(0, 0, width, height);
 
-      const fieldWidth = width + 180;
-      const fieldHeight = height + 180;
-
-      for (let i = 0; i < 96; i++) {
-        const seed = i + 1;
-        const parallax = 0.12 + hash01(seed * 2.6) * 0.16;
-        const driftX = Math.sin(time * 0.00012 + seed * 2.4) * 2.2;
-        const driftY = Math.cos(time * 0.0001 + seed * 1.7) * 2;
-        const glowRadius = 2.6 + hash01(seed * 5.1) * 5.6;
-        const coreRadius = 0.35 + hash01(seed * 6.8) * 1.25;
-        const glowAlpha = 0.025 + hash01(seed * 4.2) * 0.05;
-        const coreAlpha = 0.18 + hash01(seed * 9.4) * 0.32;
-        const baseX = (hash01(seed * 3.7) * fieldWidth * 3.4) - fieldWidth * 1.7;
-        const baseY = (hash01(seed * 8.9 + 14) * fieldHeight * 3) - fieldHeight * 1.5;
-        const starX = wrap(baseX - viewCamera.x * parallax, fieldWidth) - 90 + driftX;
-        const starY = wrap(baseY - viewCamera.y * parallax, fieldHeight) - 90 + driftY;
-
-        const glow = renderCtx.createRadialGradient(starX, starY, 0, starX, starY, glowRadius);
-        glow.addColorStop(0, `rgba(236, 244, 250, ${glowAlpha})`);
-        glow.addColorStop(1, "rgba(0,0,0,0)");
-        renderCtx.fillStyle = glow;
-        renderCtx.beginPath();
-        renderCtx.arc(starX, starY, glowRadius, 0, Math.PI * 2);
-        renderCtx.fill();
-
-        renderCtx.beginPath();
-        renderCtx.arc(starX, starY, coreRadius, 0, Math.PI * 2);
-        renderCtx.fillStyle = `rgba(245, 249, 252, ${coreAlpha})`;
-        renderCtx.fill();
+      const cache = ensureUniverseBackdropCache(mode);
+      for (const layer of cache.layers) {
+        drawUniverseBackdropLayer(renderCtx, layer, viewCamera, time, cache.tileSize);
       }
     }
 
     function drawBackground(time = 0) {
-      drawUniverseBackdrop(ctx, camera, time);
+      drawUniverseBackdrop(ctx, camera, time, "d0");
     }
 
     function drawLiminalField() {
@@ -2371,7 +2769,7 @@
     }
 
     function drawConstellationBackdrop(time) {
-      drawUniverseBackdrop(mapsCtx, mapsCamera, time);
+      drawUniverseBackdrop(mapsCtx, mapsCamera, time, "d1");
     }
 
     function drawStarFlareArm(x, y, length, thickness, angle, color, alpha, whiteAlpha = 0) {
