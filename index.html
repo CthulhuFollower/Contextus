@@ -2379,6 +2379,103 @@
       };
     }
 
+    function getConstellationHaloBreath(item, time, hovered) {
+      const star = item.star;
+      const t = time * 0.00019;
+      const seed = item.summary.seed + item.mapId * 0.317;
+      const baseAmplitude = star.starVariant === "giant"
+        ? 0.092
+        : star.starType === "blue"
+          ? 0.078
+          : star.starType === "yellow"
+            ? 0.07
+            : star.starType === "orange"
+              ? 0.064
+              : 0.06;
+      const stateDamping = item.isActive ? 0.9 : hovered ? 0.95 : 1;
+      const amplitude = baseAmplitude * stateDamping;
+
+      const main = Math.sin(t * (0.86 + hash01(seed * 4.7) * 0.18) + seed * 5.3);
+      const secondary = Math.sin(t * (1.34 + hash01(seed * 8.3) * 0.26) + seed * 11.9);
+      const envelope = Math.sin(t * (0.34 + hash01(seed * 12.9) * 0.08) + seed * 2.7);
+
+      const radius = clamp(
+        1 +
+          main * amplitude * 0.6 +
+          secondary * amplitude * 0.24 +
+          envelope * amplitude * 0.3,
+        0.92,
+        1.16
+      );
+      const alpha = clamp(
+        1 +
+          main * amplitude * 0.22 +
+          secondary * amplitude * 0.1 +
+          envelope * amplitude * 0.08,
+        0.94,
+        1.09
+      );
+      const bloom = clamp(
+        1 +
+          main * amplitude * 0.18 +
+          envelope * amplitude * 0.1,
+        0.96,
+        1.1
+      );
+
+      return {
+        radius,
+        alpha,
+        bloom
+      };
+    }
+
+    function getConstellationFlareAsymmetry(item, time, hovered) {
+      const star = item.star;
+      const t = time * 0.00031;
+      const seed = item.summary.seed + item.mapId * 0.541;
+      const baseAmplitude = star.starType === "blue"
+        ? 0.2
+        : star.starType === "yellow"
+          ? 0.17
+          : star.starType === "orange"
+            ? 0.145
+            : star.starVariant === "giant"
+              ? 0.14
+              : 0.125;
+      const stateDamping = item.isActive ? 0.92 : hovered ? 0.96 : 1;
+      const amplitude = baseAmplitude * stateDamping;
+
+      const primary = Math.sin(t * (1.04 + hash01(seed * 4.3) * 0.2) + seed * 6.1);
+      const secondary = Math.sin(
+        t * (1.72 + hash01(seed * 8.1) * 0.28) +
+        seed * 13.4 +
+        Math.sin(t * 0.27 + seed * 2.1) * 0.16
+      );
+      const balance = clamp(
+        primary * amplitude * 0.7 + secondary * amplitude * 0.38,
+        -0.24,
+        0.24
+      );
+      const diagonal = clamp(
+        Math.sin(t * (1.26 + hash01(seed * 10.4) * 0.22) + seed * 9.8) * amplitude * 0.42 +
+        Math.sin(t * (2.08 + hash01(seed * 14.7) * 0.34) + seed * 17.2) * amplitude * 0.2,
+        -0.14,
+        0.14
+      );
+
+      return {
+        verticalAlpha: 1 + balance,
+        horizontalAlpha: 1 - balance * 0.92,
+        verticalThickness: clamp(1 + balance * 0.38, 0.9, 1.12),
+        horizontalThickness: clamp(1 - balance * 0.34, 0.9, 1.12),
+        diagonalPositiveAlpha: 1 + diagonal,
+        diagonalNegativeAlpha: 1 - diagonal * 0.94,
+        diagonalPositiveThickness: clamp(1 + diagonal * 0.28, 0.92, 1.08),
+        diagonalNegativeThickness: clamp(1 - diagonal * 0.24, 0.92, 1.08)
+      };
+    }
+
     function drawConstellationMap(item, time, hovered) {
       const star = item.star;
       const emphasis = item.isActive ? 1.16 : hovered ? 1.12 : 1;
@@ -2388,11 +2485,13 @@
         Math.sin(time * 0.0015 * star.orbitSpeed + item.summary.seed * 7.1) *
           (star.pulseScale + (item.isActive ? 0.006 : hovered ? 0.003 : 0));
       const twinkle = getConstellationTwinkle(item, time, hovered);
+      const haloBreath = getConstellationHaloBreath(item, time, hovered);
+      const flareAsymmetry = getConstellationFlareAsymmetry(item, time, hovered);
       const coreRadius = radius * pulse * twinkle.scale;
-      const auraRadius = coreRadius * star.auraScale * (item.isActive ? 1.1 : hovered ? 1.05 : 1) * (0.96 + twinkle.aura * 0.12);
-      const auraAlpha = star.auraAlpha * star.starLuminosity * twinkle.aura * (item.isActive ? 1.42 : hovered ? 1.24 : 1.08);
+      const auraRadius = coreRadius * star.auraScale * (item.isActive ? 1.1 : hovered ? 1.05 : 1) * (0.96 + twinkle.aura * 0.12) * haloBreath.radius;
+      const auraAlpha = star.auraAlpha * star.starLuminosity * twinkle.aura * haloBreath.alpha * (item.isActive ? 1.42 : hovered ? 1.24 : 1.08);
       const bodyRadius = coreRadius * 1.52 * (0.98 + twinkle.brightness * 0.05);
-      const coronaRadius = coreRadius * 2.05 * (0.96 + twinkle.aura * 0.1);
+      const coronaRadius = coreRadius * 2.05 * (0.96 + twinkle.aura * 0.1) * (0.98 + (haloBreath.radius - 1) * 1.1);
       const hotCoreColor = mixColor(star.coreColor, [255, 255, 255], 0.52);
       const warmCoreColor = mixColor(star.coreColor, [255, 255, 255], 0.22);
       const whiteCoreAlpha = Math.min(
@@ -2420,7 +2519,7 @@
       mapsCtx.fill();
 
       if (twinkle.bloom > 0.02) {
-        const twinkleBloomRadius = coronaRadius * (1.02 + twinkle.bloom * 0.28);
+        const twinkleBloomRadius = coronaRadius * haloBreath.bloom * (1.02 + twinkle.bloom * 0.28);
         const twinkleBloom = mapsCtx.createRadialGradient(
           item.x,
           item.y,
@@ -2463,24 +2562,56 @@
 
       const spikeAlpha = star.spikeAlpha * star.starLuminosity * twinkle.brightness * (1 + twinkle.bloom * 0.3) * (item.isActive ? 1.24 : hovered ? 1.12 : 1);
       const spikeLength = coreRadius * star.spikeLength * (1 + twinkle.bloom * 0.16) * (item.isActive ? 1.1 : hovered ? 1.05 : 1);
-      const verticalThickness = coreRadius * 0.095;
-      const horizontalThickness = coreRadius * 0.068;
+      const verticalThickness = coreRadius * 0.095 * flareAsymmetry.verticalThickness;
+      const horizontalThickness = coreRadius * 0.068 * flareAsymmetry.horizontalThickness;
+      const verticalSpikeAlpha = spikeAlpha * flareAsymmetry.verticalAlpha;
+      const horizontalSpikeAlpha = spikeAlpha * flareAsymmetry.horizontalAlpha;
+      const diagonalPositiveThickness = coreRadius * 0.062 * flareAsymmetry.diagonalPositiveThickness;
+      const diagonalNegativeThickness = coreRadius * 0.054 * flareAsymmetry.diagonalNegativeThickness;
+      const diagonalPositiveAlpha = spikeAlpha * flareAsymmetry.diagonalPositiveAlpha;
+      const diagonalNegativeAlpha = spikeAlpha * flareAsymmetry.diagonalNegativeAlpha;
 
       mapsCtx.save();
       mapsCtx.globalCompositeOperation = "lighter";
 
-      drawStarFlareArm(item.x, item.y, spikeLength * 1.06, verticalThickness * 2.8, Math.PI / 2, star.haloColor, spikeAlpha * 0.2, 0);
-      drawStarFlareArm(item.x, item.y, spikeLength * 0.86, verticalThickness * 1.38, Math.PI / 2, star.haloColor, spikeAlpha * 0.46, 0.08);
-      drawStarFlareArm(item.x, item.y, spikeLength * 0.42, verticalThickness * 0.34, Math.PI / 2, hotCoreColor, spikeAlpha * 0.58, spikeAlpha * 0.84);
+      drawStarFlareArm(item.x, item.y, spikeLength * 1.06, verticalThickness * 2.8, Math.PI / 2, star.haloColor, verticalSpikeAlpha * 0.2, 0);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.86, verticalThickness * 1.38, Math.PI / 2, star.haloColor, verticalSpikeAlpha * 0.46, 0.08);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.42, verticalThickness * 0.34, Math.PI / 2, hotCoreColor, verticalSpikeAlpha * 0.58, verticalSpikeAlpha * 0.84);
 
-      drawStarFlareArm(item.x, item.y, spikeLength * 0.88, horizontalThickness * 2.3, 0, star.haloColor, spikeAlpha * 0.16, 0);
-      drawStarFlareArm(item.x, item.y, spikeLength * 0.72, horizontalThickness * 1.16, 0, star.haloColor, spikeAlpha * 0.36, 0.05);
-      drawStarFlareArm(item.x, item.y, spikeLength * 0.34, horizontalThickness * 0.3, 0, hotCoreColor, spikeAlpha * 0.44, spikeAlpha * 0.66);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.88, horizontalThickness * 2.3, 0, star.haloColor, horizontalSpikeAlpha * 0.16, 0);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.72, horizontalThickness * 1.16, 0, star.haloColor, horizontalSpikeAlpha * 0.36, 0.05);
+      drawStarFlareArm(item.x, item.y, spikeLength * 0.34, horizontalThickness * 0.3, 0, hotCoreColor, horizontalSpikeAlpha * 0.44, horizontalSpikeAlpha * 0.66);
 
-      if (star.starType === "blue" || star.starVariant === "giant" || item.isActive) {
-        drawStarFlareArm(item.x, item.y, spikeLength * 0.32, coreRadius * 0.04, Math.PI / 4, star.haloColor, spikeAlpha * 0.16, 0.03);
-        drawStarFlareArm(item.x, item.y, spikeLength * 0.24, coreRadius * 0.034, -Math.PI / 4, star.haloColor, spikeAlpha * 0.1, 0.02);
-      }
+      const diagonalVisibility = star.starType === "blue"
+        ? 1
+        : star.starVariant === "giant"
+          ? 0.98
+          : star.starType === "yellow"
+            ? 0.9
+            : star.starType === "orange"
+              ? 0.84
+              : 0.78;
+
+      drawStarFlareArm(
+        item.x,
+        item.y,
+        spikeLength * 0.54,
+        diagonalPositiveThickness,
+        Math.PI / 4,
+        star.haloColor,
+        diagonalPositiveAlpha * 0.3 * diagonalVisibility,
+        diagonalPositiveAlpha * 0.065 * diagonalVisibility
+      );
+      drawStarFlareArm(
+        item.x,
+        item.y,
+        spikeLength * 0.46,
+        diagonalNegativeThickness,
+        -Math.PI / 4,
+        star.haloColor,
+        diagonalNegativeAlpha * 0.22 * diagonalVisibility,
+        diagonalNegativeAlpha * 0.05 * diagonalVisibility
+      );
 
       mapsCtx.restore();
 
