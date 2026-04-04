@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Demo Estrella Offline</title>
+  <link rel="icon" href="data:," />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/controls/OrbitControls.js": "./vendor/three/OrbitControls.js"
+      }
+    }
+  </script>
+  <style>
+    :root {
+      --bg-1: #02050c;
+      --bg-2: #081120;
+      --bg-3: #111f38;
+      --panel: rgba(8, 13, 22, 0.76);
+      --panel-border: rgba(175, 207, 230, 0.16);
+      --text: #eff6ff;
+      --muted: #a3bedc;
+      --accent: #f6d27d;
+      --accent-soft: #fff0c6;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 62% 42%, rgba(255, 170, 92, 0.12), transparent 18%),
+        radial-gradient(circle at 75% 18%, rgba(122, 175, 255, 0.1), transparent 24%),
+        linear-gradient(180deg, var(--bg-3), var(--bg-2) 45%, var(--bg-1));
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        radial-gradient(circle at 14% 24%, rgba(255, 255, 255, 0.25) 0 0.7px, transparent 0.8px),
+        radial-gradient(circle at 84% 31%, rgba(255, 255, 255, 0.15) 0 0.9px, transparent 1px),
+        radial-gradient(circle at 42% 78%, rgba(255, 255, 255, 0.13) 0 0.8px, transparent 0.9px),
+        radial-gradient(circle at 68% 66%, rgba(255, 255, 255, 0.12) 0 0.7px, transparent 0.8px);
+      opacity: 0.75;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      z-index: 2;
+      width: min(380px, calc(100vw - 36px));
+      padding: 18px;
+      border-radius: 24px;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      backdrop-filter: blur(18px);
+      box-shadow:
+        0 24px 64px rgba(0, 0, 0, 0.34),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    h1,
+    p {
+      margin: 0;
+    }
+
+    .eyebrow {
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .title {
+      margin-bottom: 10px;
+      font-size: clamp(26px, 3vw, 32px);
+      line-height: 0.96;
+      letter-spacing: -0.05em;
+    }
+
+    .subtitle,
+    .hint,
+    .status {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .subtitle {
+      margin-bottom: 14px;
+    }
+
+    .status {
+      margin-bottom: 14px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(255, 212, 125, 0.08);
+      color: var(--accent-soft);
+    }
+
+    .controls {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label,
+    .switches legend {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    select,
+    input[type="range"] {
+      width: 100%;
+    }
+
+    select {
+      appearance: none;
+      border: 1px solid rgba(175, 207, 230, 0.14);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font: inherit;
+    }
+
+    input[type="range"] {
+      accent-color: #ffd27c;
+    }
+
+    .value-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .switches {
+      margin: 0;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .check-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 10px;
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .card {
+      padding: 10px 12px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .card span {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid rgba(255, 214, 143, 0.2);
+      border-radius: 999px;
+      padding: 10px 14px;
+      background:
+        linear-gradient(180deg, rgba(255, 210, 124, 0.16), rgba(255, 166, 76, 0.08));
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(255, 228, 172, 0.34);
+      background:
+        linear-gradient(180deg, rgba(255, 220, 144, 0.22), rgba(255, 176, 96, 0.12));
+    }
+
+    .hint code {
+      color: var(--accent-soft);
+    }
+
+    @media (max-width: 760px) {
+      .hud {
+        right: 18px;
+        width: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <aside class="hud">
+    <div class="eyebrow">Animated Star</div>
+    <h1 class="title">Copia offline de la estrella animada</h1>
+    <p class="subtitle">
+      Esta copia usa solo recursos locales o generados por canvas. No intenta
+      bajar texturas de NASA ni cargar librerias desde internet.
+    </p>
+
+    <div id="status" class="status">Cargando assets de NASA...</div>
+
+    <div class="meta">
+      <div class="card">
+        <strong>Tipo</strong>
+        <span id="typeValue">G</span>
+      </div>
+      <div class="card">
+        <strong>Capas</strong>
+        <span id="layersValue">3</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="field">
+        <label for="starType">Tipo espectral</label>
+        <select id="starType"></select>
+      </div>
+
+      <div class="field">
+        <label for="radiusRange">Tamano</label>
+        <div class="value-row">
+          <span>Escala visual</span>
+          <span id="radiusValue">1.15x</span>
+        </div>
+        <input id="radiusRange" type="range" min="0.65" max="1.85" step="0.01" value="1.15" />
+      </div>
+
+      <div class="field">
+        <label for="speedRange">Velocidad de animacion</label>
+        <div class="value-row">
+          <span>Shader</span>
+          <span id="speedValue">1.00x</span>
+        </div>
+        <input id="speedRange" type="range" min="0" max="2.5" step="0.01" value="1" />
+      </div>
+
+      <fieldset class="switches">
+        <legend>Capas activas</legend>
+        <label class="check-row" for="glowToggle">
+          <span>Glow</span>
+          <input id="glowToggle" type="checkbox" checked />
+        </label>
+        <label class="check-row" for="coronaToggle">
+          <span>Corona</span>
+          <input id="coronaToggle" type="checkbox" checked />
+        </label>
+      </fieldset>
+    </div>
+
+    <div class="actions">
+      <button id="resetBtn" type="button">Reiniciar vista</button>
+      <button id="pauseBtn" type="button">Pausar animacion</button>
+    </div>
+
+    <p class="hint">
+      Arrastra para orbitar y usa la rueda para zoom. Si lo abres fuera de
+      <code>http://localhost</code>, usa Live Server o cualquier servidor local.
+    </p>
+  </aside>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { EstrellaAnimadaNasa, TIPOS_ESTRELLA_NASA } from "./motor-estrella-offline.js";
+
+    const statusEl = document.getElementById("status");
+    const typeValueEl = document.getElementById("typeValue");
+    const layersValueEl = document.getElementById("layersValue");
+    const starTypeEl = document.getElementById("starType");
+    const radiusRangeEl = document.getElementById("radiusRange");
+    const radiusValueEl = document.getElementById("radiusValue");
+    const speedRangeEl = document.getElementById("speedRange");
+    const speedValueEl = document.getElementById("speedValue");
+    const glowToggleEl = document.getElementById("glowToggle");
+    const coronaToggleEl = document.getElementById("coronaToggle");
+    const resetBtnEl = document.getElementById("resetBtn");
+    const pauseBtnEl = document.getElementById("pauseBtn");
+
+    for (const starType of TIPOS_ESTRELLA_NASA) {
+      const option = document.createElement("option");
+      option.value = starType;
+      option.textContent = starType;
+      if (starType === "G") {
+        option.selected = true;
+      }
+      starTypeEl.append(option);
+    }
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.18;
+    document.body.append(renderer.domElement);
+
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 0.25, 5.9);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.minDistance = 2.6;
+    controls.maxDistance = 11;
+    controls.target.set(0, 0, 0);
+
+    const dustGeometry = new THREE.BufferGeometry();
+    const dustCount = 900;
+    const dustPositions = new Float32Array(dustCount * 3);
+    for (let i = 0; i < dustCount; i += 1) {
+      const radius = 12 + Math.random() * 28;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      dustPositions[i * 3 + 0] = radius * Math.sin(phi) * Math.cos(theta);
+      dustPositions[i * 3 + 1] = radius * Math.cos(phi) * 0.7;
+      dustPositions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta);
+    }
+    dustGeometry.setAttribute("position", new THREE.BufferAttribute(dustPositions, 3));
+
+    const dustMaterial = new THREE.PointsMaterial({
+      color: new THREE.Color(0xcfe7ff),
+      size: 0.035,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false
+    });
+
+    const dust = new THREE.Points(dustGeometry, dustMaterial);
+    scene.add(dust);
+
+    const estrella = new EstrellaAnimadaNasa({
+      radius: Number(radiusRangeEl.value),
+      starType: starTypeEl.value
+    });
+
+    scene.add(estrella.object3d);
+    window.estrellaAnimadaNasa = estrella;
+
+    let paused = false;
+    let animationTime = 0;
+    const clock = new THREE.Clock();
+
+    function updateLayersCount() {
+      let count = 1;
+      if (glowToggleEl.checked) count += 1;
+      if (coronaToggleEl.checked) count += 1;
+      layersValueEl.textContent = String(count);
+    }
+
+    function updateRadiusLabel() {
+      radiusValueEl.textContent = `${Number(radiusRangeEl.value).toFixed(2)}x`;
+    }
+
+    function updateSpeedLabel() {
+      speedValueEl.textContent = `${Number(speedRangeEl.value).toFixed(2)}x`;
+    }
+
+    function resetCamera() {
+      camera.position.set(0, 0.25, 5.9);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    }
+
+    updateLayersCount();
+    updateRadiusLabel();
+    updateSpeedLabel();
+    typeValueEl.textContent = starTypeEl.value;
+
+    statusEl.textContent = "Preparando version offline...";
+
+    estrella.ready
+      .then(() => {
+        statusEl.textContent = "Lista. Esta version no depende de recursos remotos.";
+      });
+
+    starTypeEl.addEventListener("change", () => {
+      estrella.setStarType(starTypeEl.value);
+      typeValueEl.textContent = starTypeEl.value;
+    });
+
+    radiusRangeEl.addEventListener("input", () => {
+      updateRadiusLabel();
+      estrella.setRadius(Number(radiusRangeEl.value));
+    });
+
+    speedRangeEl.addEventListener("input", () => {
+      updateSpeedLabel();
+      estrella.setAnimationSpeed(Number(speedRangeEl.value));
+    });
+
+    glowToggleEl.addEventListener("change", () => {
+      estrella.setGlowVisible(glowToggleEl.checked);
+      updateLayersCount();
+    });
+
+    coronaToggleEl.addEventListener("change", () => {
+      estrella.setCoronaVisible(coronaToggleEl.checked);
+      updateLayersCount();
+    });
+
+    resetBtnEl.addEventListener("click", () => {
+      resetCamera();
+    });
+
+    pauseBtnEl.addEventListener("click", () => {
+      paused = !paused;
+      pauseBtnEl.textContent = paused ? "Reanudar animacion" : "Pausar animacion";
+    });
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      controls.update();
+
+      const delta = clock.getDelta();
+      if (!paused) {
+        animationTime += delta;
+      }
+
+      estrella.update(animationTime, camera);
+      dust.rotation.y += 0.00035;
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+  </script>
+</body>
+</html>

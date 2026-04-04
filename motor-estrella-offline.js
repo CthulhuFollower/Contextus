@@ -29,8 +29,8 @@ export const TIPOS_ESTRELLA_NASA = Object.freeze(
 );
 
 export const ASSETS_ESTRELLA_NASA = Object.freeze({
-  surfaceTextureUrl: "https://eyes.nasa.gov/apps/exo/assets/image/exostar/genericType_grayscale.png",
-  glowTextureUrl: "https://eyes.nasa.gov/assets/static/sprites/sun_glow.png"
+  surfaceTextureUrl: null,
+  glowTextureUrl: null
 });
 
 const SURFACE_VERTEX_SHADER = `
@@ -349,6 +349,13 @@ function createFallbackGlowTexture() {
 }
 
 async function loadTextureOrFallback(url, fallbackFactory) {
+  if (!url) {
+    return {
+      texture: fallbackFactory(),
+      fallbackUsed: true
+    };
+  }
+
   const loader = new THREE.TextureLoader();
   loader.setCrossOrigin("anonymous");
 
