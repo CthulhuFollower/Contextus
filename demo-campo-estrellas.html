@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NASA Starfield Demo</title>
+  <link rel="icon" href="data:," />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.174.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.174.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap");
+
+    :root {
+      --bg-1: #02050c;
+      --bg-2: #07111f;
+      --bg-3: #0e1a2d;
+      --panel: rgba(6, 13, 22, 0.72);
+      --panel-border: rgba(176, 206, 232, 0.16);
+      --text: #ecf6ff;
+      --muted: #a6bfda;
+      --accent: #8ed4ff;
+      --accent-strong: #c8eeff;
+      --danger: #ffb6a0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      color: var(--text);
+      font-family: "Space Grotesk", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 50% 12%, rgba(92, 164, 255, 0.16), transparent 22%),
+        radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.06), transparent 24%),
+        radial-gradient(circle at 25% 75%, rgba(42, 112, 205, 0.12), transparent 28%),
+        linear-gradient(180deg, var(--bg-3), var(--bg-2) 48%, var(--bg-1));
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        radial-gradient(circle at 10% 20%, rgba(255, 255, 255, 0.24) 0 0.6px, transparent 0.7px),
+        radial-gradient(circle at 80% 35%, rgba(255, 255, 255, 0.18) 0 0.7px, transparent 0.8px),
+        radial-gradient(circle at 62% 76%, rgba(255, 255, 255, 0.16) 0 0.8px, transparent 0.9px),
+        radial-gradient(circle at 30% 58%, rgba(255, 255, 255, 0.13) 0 0.7px, transparent 0.8px);
+      opacity: 0.65;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud,
+    .selection {
+      position: fixed;
+      z-index: 2;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      backdrop-filter: blur(18px);
+      box-shadow:
+        0 24px 64px rgba(0, 0, 0, 0.34),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .hud {
+      top: 18px;
+      left: 18px;
+      width: min(380px, calc(100vw - 36px));
+      padding: 18px 18px 16px;
+      border-radius: 22px;
+    }
+
+    .selection {
+      right: 18px;
+      bottom: 18px;
+      width: min(340px, calc(100vw - 36px));
+      min-height: 132px;
+      padding: 16px;
+      border-radius: 20px;
+    }
+
+    h1,
+    h2,
+    p {
+      margin: 0;
+    }
+
+    .eyebrow {
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .title {
+      margin-bottom: 10px;
+      font-size: clamp(24px, 3vw, 30px);
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .subtitle,
+    .hint,
+    .meta,
+    .selection-empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .subtitle {
+      margin-bottom: 14px;
+    }
+
+    .status {
+      margin-bottom: 14px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(131, 186, 235, 0.08);
+      color: var(--accent-strong);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .status.error {
+      background: rgba(255, 140, 110, 0.1);
+      color: var(--danger);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .stat {
+      padding: 10px 12px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.028);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .stat-label {
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid rgba(166, 208, 238, 0.16);
+      border-radius: 999px;
+      padding: 10px 14px;
+      background:
+        linear-gradient(180deg, rgba(140, 201, 255, 0.14), rgba(90, 145, 220, 0.06));
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      background:
+        linear-gradient(180deg, rgba(152, 217, 255, 0.18), rgba(109, 170, 250, 0.09));
+      border-color: rgba(198, 234, 255, 0.28);
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    .selection-title {
+      margin-bottom: 8px;
+      font-size: 20px;
+      line-height: 1.1;
+      letter-spacing: -0.04em;
+    }
+
+    .selection-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .selection-card {
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .selection-card strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .selection-card span {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    @media (max-width: 900px) {
+      .selection {
+        left: 18px;
+        right: 18px;
+        width: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <aside class="hud">
+    <div class="eyebrow">Starfield Core</div>
+    <h1 class="title">Render reutilizable del campo de estrellas NASA</h1>
+    <p class="subtitle">
+      Este HTML usa datos reales de Eyes on Exoplanets y el núcleo extraído del bundle,
+      pero deja fuera el resto del motor, la UI y la navegación original.
+    </p>
+
+    <div id="status" class="status">Preparando escena…</div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">Sistemas</div>
+        <div id="systemsCount" class="stat-value">--</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Planetas</div>
+        <div id="planetsCount" class="stat-value">--</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Sprite</div>
+        <div id="spriteMode" class="stat-value">Glow</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="fadeBtn" disabled>Ocultar estrellas</button>
+      <button id="spriteBtn" disabled>Cambiar sprite</button>
+      <button id="recenterBtn" disabled>Recentralizar camara</button>
+    </div>
+
+    <p class="hint">
+      Arrastra para orbitar, usa la rueda para zoom y haz clic en una estrella para ver su ficha.
+      Si el navegador bloquea módulos desde <code>file://</code>, ábrelo con Live Server o cualquier servidor local.
+    </p>
+  </aside>
+
+  <aside id="selection" class="selection">
+    <p class="eyebrow">Seleccion</p>
+    <div id="selectionEmpty" class="selection-empty">
+      Cuando hagas clic en una estrella visible, aquí aparecerán sus datos base del catálogo.
+    </div>
+    <div id="selectionContent" hidden>
+      <h2 id="selectionTitle" class="selection-title"></h2>
+      <p id="selectionSubtitle" class="meta"></p>
+      <div class="selection-grid">
+        <div class="selection-card">
+          <strong>Tipo</strong>
+          <span id="selectionType">--</span>
+        </div>
+        <div class="selection-card">
+          <strong>Planetas</strong>
+          <span id="selectionPlanets">--</span>
+        </div>
+        <div class="selection-card">
+          <strong>Magnitud</strong>
+          <span id="selectionMagnitude">--</span>
+        </div>
+        <div class="selection-card">
+          <strong>Distancia</strong>
+          <span id="selectionDistance">--</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { NasaStarfieldCore } from "./motor-campo-estrellas.js";
+    import { loadNasaExoDatabases, NASA_EYES_CONFIG } from "./cargador-datos-exoplanetas.js";
+
+    const statusEl = document.getElementById("status");
+    const systemsCountEl = document.getElementById("systemsCount");
+    const planetsCountEl = document.getElementById("planetsCount");
+    const spriteModeEl = document.getElementById("spriteMode");
+    const fadeBtn = document.getElementById("fadeBtn");
+    const spriteBtn = document.getElementById("spriteBtn");
+    const recenterBtn = document.getElementById("recenterBtn");
+
+    const selectionEmptyEl = document.getElementById("selectionEmpty");
+    const selectionContentEl = document.getElementById("selectionContent");
+    const selectionTitleEl = document.getElementById("selectionTitle");
+    const selectionSubtitleEl = document.getElementById("selectionSubtitle");
+    const selectionTypeEl = document.getElementById("selectionType");
+    const selectionPlanetsEl = document.getElementById("selectionPlanets");
+    const selectionMagnitudeEl = document.getElementById("selectionMagnitude");
+    const selectionDistanceEl = document.getElementById("selectionDistance");
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x000000, 0);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.92;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 1e5, 4e18);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.04;
+    controls.rotateSpeed = 0.42;
+    controls.zoomSpeed = 0.9;
+    controls.minDistance = 1e10;
+    controls.maxDistance = 8e17;
+
+    let starfield = null;
+    let spriteMode = 0;
+    let starsVisible = true;
+    let cameraHome = new THREE.Vector3(0, 0, 2.2e16);
+
+    function setStatus(message, isError = false) {
+      statusEl.textContent = message;
+      statusEl.classList.toggle("error", isError);
+    }
+
+    function formatDistance(value) {
+      if (!Number.isFinite(value)) {
+        return "NA";
+      }
+
+      if (value >= 1e12) {
+        return `${(value / 9.4607e12).toFixed(1)} ly`;
+      }
+
+      if (value >= 1e9) {
+        return `${(value / 1.496e8).toFixed(0)} AU`;
+      }
+
+      return value.toLocaleString("en-US");
+    }
+
+    function getStarType(star) {
+      return star.starType || star.stellar_type || star.st_spectype || "Unknown";
+    }
+
+    function updateSelection(star) {
+      if (!star) {
+        selectionEmptyEl.hidden = false;
+        selectionContentEl.hidden = true;
+        return;
+      }
+
+      selectionEmptyEl.hidden = true;
+      selectionContentEl.hidden = false;
+
+      const planetCount = Array.isArray(star.planets) ? star.planets.length : star.planet_count || 0;
+      const title = star.displayName || star.title || star.exo_id;
+      const subtitle =
+        star.tagline ||
+        star.subtitle ||
+        star.custom_star_description ||
+        "Sin descripcion corta en el registro local.";
+
+      selectionTitleEl.textContent = title;
+      selectionSubtitleEl.textContent = subtitle;
+      selectionTypeEl.textContent = getStarType(star);
+      selectionPlanetsEl.textContent = String(planetCount);
+      selectionMagnitudeEl.textContent = star.st_optmag ?? star.magnitude ?? "NA";
+      selectionDistanceEl.textContent = star.st_dist
+        ? `${(star.st_dist * 3.26156).toFixed(1)} ly`
+        : formatDistance(
+            star.positionJ2000
+              ? Math.sqrt(
+                  star.positionJ2000.x * star.positionJ2000.x +
+                  star.positionJ2000.y * star.positionJ2000.y +
+                  star.positionJ2000.z * star.positionJ2000.z
+                )
+              : Number.NaN
+          );
+    }
+
+    function computeCameraHome(stars) {
+      const magnitudes = stars
+        .map(star => {
+          const position = star.positionJ2000;
+          if (!position) {
+            return null;
+          }
+
+          return Math.sqrt(
+            position.x * position.x +
+            position.y * position.y +
+            position.z * position.z
+          );
+        })
+        .filter(value => Number.isFinite(value) && value > 1e5)
+        .sort((a, b) => a - b);
+
+      if (!magnitudes.length) {
+        return new THREE.Vector3(0, 0, 2.2e16);
+      }
+
+      const qIndex = Math.floor(magnitudes.length * 0.35);
+      const distance = magnitudes[Math.min(qIndex, magnitudes.length - 1)];
+      return new THREE.Vector3(distance * 0.09, distance * 0.03, distance);
+    }
+
+    function recenterCamera() {
+      camera.position.copy(cameraHome);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    }
+
+    async function init() {
+      try {
+        setStatus("Descargando bases reales de Eyes on Exoplanets…");
+
+        const { stars, planets } = await loadNasaExoDatabases();
+        const systems = stars.items.filter(star => star.position && star.position[0] !== -1 && Array.isArray(star.planets) && star.planets.length > 0);
+
+        systemsCountEl.textContent = systems.length.toLocaleString("en-US");
+        planetsCountEl.textContent = planets.items.length.toLocaleString("en-US");
+
+        cameraHome = computeCameraHome(systems);
+        camera.position.copy(cameraHome);
+        controls.target.set(0, 0, 0);
+        controls.update();
+
+        const farthest = systems.reduce((max, star) => {
+          const position = star.positionJ2000;
+          if (!position) {
+            return max;
+          }
+
+          const magnitude = Math.sqrt(
+            position.x * position.x +
+            position.y * position.y +
+            position.z * position.z
+          );
+
+          return Math.max(max, magnitude);
+        }, 0);
+
+        camera.near = 1e5;
+        camera.far = Math.max(farthest * 1.2, 1e16);
+        camera.updateProjectionMatrix();
+        controls.maxDistance = Math.max(farthest * 0.8, cameraHome.z * 4);
+        controls.minDistance = Math.max(cameraHome.z * 0.001, 1e8);
+
+        setStatus("Construyendo starfield con el core extraído…");
+
+        starfield = new NasaStarfieldCore({
+          scene,
+          fieldName: "ExoMainstarfield",
+          spriteTextureUrls: {
+            0: `${NASA_EYES_CONFIG.staticUrl}/image/exofield/twinkle-ball.png`,
+            1: `${NASA_EYES_CONFIG.staticUrl}/image/exofield/number-solid-outline.png`
+          }
+        });
+
+        starfield.init(stars.byId, planets.byId, updateSelection);
+        starfield.setStarSprite(spriteMode);
+        starfield.starFade(true, 1800);
+
+        fadeBtn.disabled = false;
+        spriteBtn.disabled = false;
+        recenterBtn.disabled = false;
+
+        setStatus("Listo. Estás viendo el starfield reutilizable sin cargar el bundle completo.");
+      } catch (error) {
+        console.error(error);
+        setStatus(`No se pudo iniciar el demo: ${error.message}`, true);
+      }
+    }
+
+    fadeBtn.addEventListener("click", () => {
+      if (!starfield) {
+        return;
+      }
+
+      starsVisible = !starsVisible;
+      starfield.starFade(starsVisible, 1200);
+      fadeBtn.textContent = starsVisible ? "Ocultar estrellas" : "Mostrar estrellas";
+    });
+
+    spriteBtn.addEventListener("click", () => {
+      if (!starfield) {
+        return;
+      }
+
+      spriteMode = spriteMode === 0 ? 1 : 0;
+      starfield.setStarSprite(spriteMode);
+      spriteModeEl.textContent = spriteMode === 0 ? "Glow" : "Conteo";
+    });
+
+    recenterBtn.addEventListener("click", () => {
+      recenterCamera();
+    });
+
+    renderer.domElement.addEventListener("click", event => {
+      if (!starfield) {
+        return;
+      }
+
+      starfield.pick(event.clientX, event.clientY, camera, renderer);
+    });
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    renderer.setAnimationLoop(() => {
+      controls.update();
+      renderer.render(scene, camera);
+    });
+
+    init();
+  </script>
+</body>
+</html>
