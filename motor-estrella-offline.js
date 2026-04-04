@@ -1,12 +1,12 @@
 import * as THREE from "three";
 
-// Extraido y simplificado desde `nasa codigo.js`:
-// - tabla de colores de la estrella: lineas 91889-91890
-// - ruido GLSL animado: lineas 91950-91980
-// - glow billboard: clase _g alrededor de 62030
-// - corona/emision exterior: clase Hp alrededor de 54763
+// Version desacoplada del motor de estrella animada:
+// - paleta de colores por tipo espectral
+// - shader procedural para la superficie
+// - glow billboard
+// - corona exterior separada
 
-export const COLORES_TIPO_ESTRELLA_NASA = Object.freeze({
+export const COLORES_TIPO_ESTRELLA = Object.freeze({
   "": [[1, 1, 0.65], [1, 0.9, 0.2]],
   Unknown: [[1, 1, 0.65], [1, 0.9, 0.2]],
   A: [[1, 1, 1], [0.8, 0.8, 1]],
@@ -24,11 +24,11 @@ export const COLORES_TIPO_ESTRELLA_NASA = Object.freeze({
   WD: [[0.945, 0.945, 1], [0.784, 0.847, 1]]
 });
 
-export const TIPOS_ESTRELLA_NASA = Object.freeze(
-  Object.keys(COLORES_TIPO_ESTRELLA_NASA).filter(Boolean)
+export const TIPOS_ESTRELLA = Object.freeze(
+  Object.keys(COLORES_TIPO_ESTRELLA).filter(Boolean)
 );
 
-export const ASSETS_ESTRELLA_NASA = Object.freeze({
+export const ASSETS_ESTRELLA = Object.freeze({
   surfaceTextureUrl: null,
   glowTextureUrl: null
 });
@@ -278,7 +278,7 @@ function toColor(value) {
 }
 
 function getStarColors(starType) {
-  const colors = COLORES_TIPO_ESTRELLA_NASA[starType] || COLORES_TIPO_ESTRELLA_NASA.Unknown;
+  const colors = COLORES_TIPO_ESTRELLA[starType] || COLORES_TIPO_ESTRELLA.Unknown;
 
   return {
     bright: toColor(colors[0]),
@@ -374,7 +374,7 @@ async function loadTextureOrFallback(url, fallbackFactory) {
   }
 }
 
-export class EstrellaAnimadaNasa {
+export class EstrellaAnimada {
   constructor(options = {}) {
     this.options = {
       radius: options.radius ?? 1.15,
@@ -384,13 +384,13 @@ export class EstrellaAnimadaNasa {
       rotationSpeed: options.rotationSpeed ?? 0.01,
       axialTilt: options.axialTilt ?? 50,
       animationSpeed: options.animationSpeed ?? 1,
-      surfaceTextureUrl: options.surfaceTextureUrl ?? ASSETS_ESTRELLA_NASA.surfaceTextureUrl,
-      glowTextureUrl: options.glowTextureUrl ?? ASSETS_ESTRELLA_NASA.glowTextureUrl
+      surfaceTextureUrl: options.surfaceTextureUrl ?? ASSETS_ESTRELLA.surfaceTextureUrl,
+      glowTextureUrl: options.glowTextureUrl ?? ASSETS_ESTRELLA.glowTextureUrl
     };
 
     this.object3d = new THREE.Group();
-    this.object3d.name = "estrella-animada-nasa";
-    this.object3d.userData.nasaAnimatedStar = this;
+    this.object3d.name = "estrella-animada";
+    this.object3d.userData.animatedStar = this;
     this.usedFallbackAssets = false;
 
     const colors = getStarColors(this.options.starType);
@@ -584,8 +584,8 @@ export class EstrellaAnimadaNasa {
   }
 }
 
-export async function crearEstrellaAnimadaNasa(options = {}) {
-  const estrella = new EstrellaAnimadaNasa(options);
+export async function crearEstrellaAnimada(options = {}) {
+  const estrella = new EstrellaAnimada(options);
   await estrella.ready;
   return estrella;
 }

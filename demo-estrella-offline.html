@@ -263,10 +263,10 @@
     <h1 class="title">Copia offline de la estrella animada</h1>
     <p class="subtitle">
       Esta copia usa solo recursos locales o generados por canvas. No intenta
-      bajar texturas de NASA ni cargar librerias desde internet.
+      bajar texturas externas ni cargar librerias desde internet.
     </p>
 
-    <div id="status" class="status">Cargando assets de NASA...</div>
+    <div id="status" class="status">Preparando recursos locales...</div>
 
     <div class="meta">
       <div class="card">
@@ -330,7 +330,7 @@
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-    import { EstrellaAnimadaNasa, TIPOS_ESTRELLA_NASA } from "./motor-estrella-offline.js";
+    import { EstrellaAnimada, TIPOS_ESTRELLA } from "./motor-estrella-offline.js";
 
     const statusEl = document.getElementById("status");
     const typeValueEl = document.getElementById("typeValue");
@@ -345,7 +345,7 @@
     const resetBtnEl = document.getElementById("resetBtn");
     const pauseBtnEl = document.getElementById("pauseBtn");
 
-    for (const starType of TIPOS_ESTRELLA_NASA) {
+    for (const starType of TIPOS_ESTRELLA) {
       const option = document.createElement("option");
       option.value = starType;
       option.textContent = starType;
@@ -398,13 +398,13 @@
     const dust = new THREE.Points(dustGeometry, dustMaterial);
     scene.add(dust);
 
-    const estrella = new EstrellaAnimadaNasa({
+    const estrella = new EstrellaAnimada({
       radius: Number(radiusRangeEl.value),
       starType: starTypeEl.value
     });
 
     scene.add(estrella.object3d);
-    window.estrellaAnimadaNasa = estrella;
+    window.estrellaAnimada = estrella;
 
     let paused = false;
     let animationTime = 0;
