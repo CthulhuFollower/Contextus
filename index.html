@@ -456,6 +456,19 @@
       pointer-events: none;
     }
 
+    .note-card.is-preview {
+      z-index: 54;
+      width: min(240px, calc(100vw - 48px));
+      padding: 12px 13px;
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, rgba(10, 16, 23, 0.9), rgba(6, 10, 16, 0.82)),
+        rgba(7, 12, 18, 0.86);
+      box-shadow:
+        0 14px 28px rgba(0, 0, 0, 0.22),
+        inset 0 1px 0 rgba(255,255,255,0.025);
+    }
+
     .note-card.is-visible {
       display: block;
     }
@@ -469,6 +482,21 @@
       white-space: pre-wrap;
       scrollbar-width: thin;
       scrollbar-color: rgba(173, 196, 213, 0.28) transparent;
+    }
+
+    .note-card.is-preview .note-card-title {
+      margin-bottom: 8px;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      color: rgba(219, 232, 242, 0.82);
+    }
+
+    .note-card.is-preview .note-card-body {
+      max-height: min(156px, 24vh);
+      overflow: hidden;
+      font-size: 11px;
+      line-height: 1.52;
+      color: rgba(214, 227, 236, 0.84);
     }
   </style>
 </head>
@@ -561,6 +589,7 @@
     let nodeIdCounter = 0;
     let selectedNodeId = null;
     let editingNodeId = null;
+    let altRevealActive = false;
 
     let draggedNodeId = null;
     let dragOffsetX = 0;
@@ -592,6 +621,7 @@
     let overlayMapDragOffsetY = 0;
     let overlayDraggedMapDriftX = 0;
     let overlayDraggedMapDriftY = 0;
+    const adjacentNoteCards = new Map();
 
     const overlayPointer = {
       x: 0,
@@ -1625,6 +1655,23 @@
       return result;
     }
 
+    function getAdjacentNodes(nodeId) {
+      const node = getNodeById(nodeId);
+      if (!node) return [];
+
+      const adjacent = [];
+      if (node.parentId !== null) {
+        const parent = getNodeById(node.parentId);
+        if (parent) adjacent.push(parent);
+      }
+
+      for (const child of getChildren(node.id)) {
+        adjacent.push(child);
+      }
+
+      return adjacent;
+    }
+
     function addChildNode() {
       const parent = getNodeById(selectedNodeId);
       if (!parent) return;
@@ -1731,6 +1778,43 @@
       noteCard.setAttribute("aria-hidden", "true");
     }
 
+    function ensureAdjacentNoteCard(nodeId) {
+      let entry = adjacentNoteCards.get(nodeId);
+      if (entry) return entry;
+
+      const card = document.createElement("div");
+      card.className = "note-card is-preview";
+      card.setAttribute("aria-hidden", "true");
+
+      const title = document.createElement("div");
+      title.className = "note-card-title";
+
+      const body = document.createElement("div");
+      body.className = "note-card-body";
+
+      card.append(title, body);
+      app.append(card);
+
+      entry = { card, title, body };
+      adjacentNoteCards.set(nodeId, entry);
+      return entry;
+    }
+
+    function hideAdjacentNoteCards() {
+      for (const entry of adjacentNoteCards.values()) {
+        entry.card.classList.remove("is-visible");
+        entry.card.setAttribute("aria-hidden", "true");
+      }
+    }
+
+    function pruneAdjacentNoteCards(visibleIds) {
+      for (const [nodeId, entry] of adjacentNoteCards.entries()) {
+        if (visibleIds.has(nodeId)) continue;
+        entry.card.remove();
+        adjacentNoteCards.delete(nodeId);
+      }
+    }
+
     function positionFloatingPanel(element, anchorX, anchorY, xOffset = 32) {
       const margin = 16;
       const rect = element.getBoundingClientRect();
@@ -1747,6 +1831,120 @@
 
       element.style.left = `${left}px`;
       element.style.top = `${top}px`;
+    }
+
+    function positionAdjacentNoteLane(items, side) {
+      if (!items.length) return;
+
+      const margin = 16;
+      const gap = 12;
+
+      items.sort((a, b) => a.preferredTop - b.preferredTop);
+
+      let cursorTop = margin;
+      for (const item of items) {
+        item.top = Math.max(item.preferredTop, cursorTop);
+        cursorTop = item.top + item.height + gap;
+      }
+
+      const overflowBottom = cursorTop - gap - (height - margin);
+      if (overflowBottom > 0) {
+        for (let i = items.length - 1; i >= 0; i--) {
+          items[i].top -= overflowBottom;
+        }
+      }
+
+      const firstTop = items[0].top;
+      if (firstTop < margin) {
+        const shiftDown = margin - firstTop;
+        for (const item of items) {
+          item.top += shiftDown;
+        }
+      }
+
+      for (const item of items) {
+        const horizontalOffset = 26 + Math.abs(item.directionX) * 18;
+        let left = side === "right"
+          ? item.anchorX + horizontalOffset
+          : item.anchorX - item.width - horizontalOffset;
+
+        left = clamp(left, margin, Math.max(margin, width - item.width - margin));
+        item.entry.card.style.left = `${left}px`;
+        item.entry.card.style.top = `${clamp(item.top, margin, Math.max(margin, height - item.height - margin))}px`;
+      }
+    }
+
+    function updateAdjacentNoteCards() {
+      if (!altRevealActive || mapsOverlayOpen || editingNodeId) {
+        hideAdjacentNoteCards();
+        return;
+      }
+
+      const selectedNode = getNodeById(selectedNodeId);
+      if (!selectedNode) {
+        hideAdjacentNoteCards();
+        return;
+      }
+
+      const selectedX = selectedNode.renderX + camera.x;
+      const selectedY = selectedNode.renderY + camera.y;
+      const adjacentNodes = getAdjacentNodes(selectedNode.id)
+        .filter(node => getNodeNote(node).length > 0);
+      const visibleIds = new Set(adjacentNodes.map(node => node.id));
+
+      pruneAdjacentNoteCards(visibleIds);
+      if (!adjacentNodes.length) {
+        hideAdjacentNoteCards();
+        return;
+      }
+
+      const lanes = {
+        left: [],
+        right: []
+      };
+
+      adjacentNodes.sort((a, b) => {
+        const angleA = Math.atan2(a.renderY - selectedNode.renderY, a.renderX - selectedNode.renderX);
+        const angleB = Math.atan2(b.renderY - selectedNode.renderY, b.renderX - selectedNode.renderX);
+        return angleA - angleB;
+      });
+
+      for (const node of adjacentNodes) {
+        const entry = ensureAdjacentNoteCard(node.id);
+        const note = getNodeNote(node);
+        const title = trimText(getNodeDisplayTitle(node), 30);
+
+        if (entry.title.textContent !== title) {
+          entry.title.textContent = title;
+        }
+
+        if (entry.body.textContent !== note) {
+          entry.body.textContent = note;
+        }
+
+        entry.card.classList.add("is-visible");
+        entry.card.setAttribute("aria-hidden", "false");
+
+        const anchorX = node.renderX + camera.x;
+        const anchorY = node.renderY + camera.y;
+        const dx = anchorX - selectedX;
+        const dy = anchorY - selectedY;
+        const direction = normalize(dx || 0.001, dy || -1);
+        const side = dx < 0 ? "left" : "right";
+        const rect = entry.card.getBoundingClientRect();
+
+        lanes[side].push({
+          entry,
+          anchorX: anchorX + direction.x * 6,
+          preferredTop: anchorY - rect.height * 0.5 + clamp(direction.y * 24, -28, 28),
+          directionX: direction.x,
+          width: rect.width,
+          height: rect.height
+        });
+      }
+
+      positionAdjacentNoteLane(lanes.left, "left");
+      positionAdjacentNoteLane(lanes.right, "right");
     }
 
     function updateSelectedNoteCard() {
@@ -3814,6 +4012,7 @@
       if (editingNodeId && !mapsOverlayOpen) positionEditor();
       else if (!mapsOverlayOpen) updateSelectedNoteCard();
       else hideNoteCard();
+      updateAdjacentNoteCards();
 
       if (mapsOverlayOpen) drawConstellation(time);
       else mapsCtx.clearRect(0, 0, width, height);
@@ -4382,6 +4581,29 @@
         e.preventDefault();
         closeEditor(false);
       }
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Alt") {
+        altRevealActive = true;
+      }
+    });
+
+    window.addEventListener("keyup", (e) => {
+      if (e.key !== "Alt") return;
+      altRevealActive = false;
+      hideAdjacentNoteCards();
+    });
+
+    window.addEventListener("blur", () => {
+      altRevealActive = false;
+      hideAdjacentNoteCards();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) return;
+      altRevealActive = false;
+      hideAdjacentNoteCards();
     });
 
     window.addEventListener("keydown", (e) => {
