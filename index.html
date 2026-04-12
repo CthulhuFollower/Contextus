@@ -640,7 +640,9 @@
       x: 0,
       y: 0,
       targetX: 0,
-      targetY: 0
+      targetY: 0,
+      zoom: 1,
+      targetZoom: 1
     };
 
     const mapsCamera = {
@@ -654,6 +656,8 @@
 
     const MAPS_ZOOM_MIN = 0.08;
     const MAPS_ZOOM_MAX = 18;
+    const D0_ZOOM_MIN = 0.36;
+    const D0_ZOOM_MAX = 3.6;
     const MAPS_ENTER_DURATION = 1280;
     const UNIVERSE_BACKDROP_TILE_SIZE = 960;
     const UNIVERSE_BACKDROP_REFERENCE_AREA = 2100 * 1260;
@@ -755,7 +759,8 @@
       renderer: null,
       scene: null,
       camera: null,
-      estrella: null
+      estrella: null,
+      paletteSignature: ""
     };
 
     function resize() {
@@ -1183,7 +1188,11 @@
           x: rawMap && rawMap.camera ? rawMap.camera.x ?? width / 2 : width / 2,
           y: rawMap && rawMap.camera ? rawMap.camera.y ?? height / 2 : height / 2,
           targetX: rawMap && rawMap.camera ? rawMap.camera.targetX ?? (rawMap.camera.x ?? width / 2) : width / 2,
-          targetY: rawMap && rawMap.camera ? rawMap.camera.targetY ?? (rawMap.camera.y ?? height / 2) : height / 2
+          targetY: rawMap && rawMap.camera ? rawMap.camera.targetY ?? (rawMap.camera.y ?? height / 2) : height / 2,
+          zoom: rawMap && rawMap.camera ? clamp(Number(rawMap.camera.zoom) || 1, D0_ZOOM_MIN, D0_ZOOM_MAX) : 1,
+          targetZoom: rawMap && rawMap.camera
+            ? clamp(Number(rawMap.camera.targetZoom) || Number(rawMap.camera.zoom) || 1, D0_ZOOM_MIN, D0_ZOOM_MAX)
+            : 1
         },
         nodes: sanitizedNodes,
         links: sanitizedLinks
@@ -1206,7 +1215,9 @@
           x: camera.x,
           y: camera.y,
           targetX: camera.targetX,
-          targetY: camera.targetY
+          targetY: camera.targetY,
+          zoom: camera.zoom,
+          targetZoom: camera.targetZoom
         },
         nodes: nodes.map(node => ({
           id: node.id,
@@ -1300,6 +1311,8 @@
       camera.y = nextCamera.y ?? height / 2;
       camera.targetX = nextCamera.targetX ?? camera.x;
       camera.targetY = nextCamera.targetY ?? camera.y;
+      camera.zoom = clamp(Number(nextCamera.zoom) || 1, D0_ZOOM_MIN, D0_ZOOM_MAX);
+      camera.targetZoom = clamp(Number(nextCamera.targetZoom) || camera.zoom, D0_ZOOM_MIN, D0_ZOOM_MAX);
 
       for (const savedNode of state.nodes || []) {
         nodes.push({
@@ -1757,21 +1770,36 @@
       };
     }
 
-    function screenToWorld(x, y) {
+    function screenToWorld(
+      x,
+      y,
+      zoom = camera.zoom,
+      cameraX = camera.x,
+      cameraY = camera.y
+    ) {
+      const safeZoom = Math.max(zoom, 0.0001);
       return {
-        x: x - camera.x,
-        y: y - camera.y
+        x: (x - cameraX) / safeZoom,
+        y: (y - cameraY) / safeZoom
+      };
+    }
+
+    function projectWorldPoint(x, y, zoom = camera.zoom, cameraX = camera.x, cameraY = camera.y) {
+      return {
+        x: x * zoom + cameraX,
+        y: y * zoom + cameraY
       };
     }
 
     function getNodeAtScreen(x, y) {
       for (let i = nodes.length - 1; i >= 0; i--) {
         const n = nodes[i];
-        const sx = n.renderX + camera.x;
-        const sy = n.renderY + camera.y;
+        const screenPoint = projectWorldPoint(n.renderX, n.renderY);
+        const sx = screenPoint.x;
+        const sy = screenPoint.y;
         const dx = x - sx;
         const dy = y - sy;
-        const hitRadius = Math.max(18, n.visualRadius + 10);
+        const hitRadius = Math.max(18, (n.visualRadius + 10) * camera.zoom);
         if (dx * dx + dy * dy <= hitRadius * hitRadius) return n;
       }
       return null;
@@ -1903,8 +1931,9 @@
         return;
       }
 
-      const selectedX = selectedNode.renderX + camera.x;
-      const selectedY = selectedNode.renderY + camera.y;
+      const selectedPoint = projectWorldPoint(selectedNode.renderX, selectedNode.renderY);
+      const selectedX = selectedPoint.x;
+      const selectedY = selectedPoint.y;
       const adjacentNodes = getAdjacentNodes(selectedNode.id)
         .filter(node => getNodeNote(node).length > 0);
       const visibleIds = new Set(adjacentNodes.map(node => node.id));
@@ -1942,8 +1971,9 @@
         entry.card.classList.add("is-visible");
         entry.card.setAttribute("aria-hidden", "false");
 
-        const anchorX = node.renderX + camera.x;
-        const anchorY = node.renderY + camera.y;
+        const anchorPoint = projectWorldPoint(node.renderX, node.renderY);
+        const anchorX = anchorPoint.x;
+        const anchorY = anchorPoint.y;
         const dx = anchorX - selectedX;
         const dy = anchorY - selectedY;
         const direction = normalize(dx || 0.001, dy || -1);
@@ -1990,9 +2020,8 @@
         noteCard.setAttribute("aria-hidden", "false");
       }
 
-      const x = node.renderX + camera.x;
-      const y = node.renderY + camera.y;
-      positionFloatingPanel(noteCard, x, y, 28);
+      const point = projectWorldPoint(node.renderX, node.renderY);
+      positionFloatingPanel(noteCard, point.x, point.y, 28);
     }
 
     function lerp(a, b, t) {
@@ -2011,6 +2040,7 @@
     function updateNodes() {
       camera.x += (camera.targetX - camera.x) * 0.12;
       camera.y += (camera.targetY - camera.y) * 0.12;
+      camera.zoom += (camera.targetZoom - camera.zoom) * 0.14;
 
       for (const node of nodes) {
         const pulsing = performance.now() < node.pulseUntil;
@@ -2602,13 +2632,16 @@
     }
 
     function drawLinks() {
+      const zoom = camera.zoom;
       for (const link of links) {
         const aNode = getNodeById(link.from);
         const bNode = getNodeById(link.to);
         if (!aNode || !bNode) continue;
 
-        const a = { x: aNode.renderX + camera.x, y: aNode.renderY + camera.y, vx: aNode.vx, vy: aNode.vy };
-        const b = { x: bNode.renderX + camera.x, y: bNode.renderY + camera.y, vx: bNode.vx, vy: bNode.vy };
+        const aPoint = projectWorldPoint(aNode.renderX, aNode.renderY);
+        const bPoint = projectWorldPoint(bNode.renderX, bNode.renderY);
+        const a = { x: aPoint.x, y: aPoint.y, vx: aNode.vx * zoom, vy: aNode.vy * zoom };
+        const b = { x: bPoint.x, y: bPoint.y, vx: bNode.vx * zoom, vy: bNode.vy * zoom };
 
         const active = aNode.id === selectedNodeId || bNode.id === selectedNodeId;
 
@@ -2637,7 +2670,7 @@
 
         ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
         ctx.strokeStyle = active ? "rgba(218, 235, 248, 0.42)" : "rgba(150, 182, 205, 0.16)";
-        ctx.lineWidth = active ? 1.55 : 1.1;
+        ctx.lineWidth = Math.max(0.45, (active ? 1.55 : 1.1) * zoom);
         ctx.stroke();
 
         if (link.lastEnergy > 0.02 && active) {
@@ -2650,7 +2683,7 @@
           }
           ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
           ctx.strokeStyle = "rgba(235, 245, 252, 0.05)";
-          ctx.lineWidth = 4;
+          ctx.lineWidth = Math.max(1, 4 * zoom);
           ctx.stroke();
         }
       }
@@ -2856,6 +2889,7 @@
           centerStarWebGL.scene = scene;
           centerStarWebGL.camera = camera3d;
           centerStarWebGL.estrella = estrella;
+          centerStarWebGL.paletteSignature = "";
           centerStarWebGL.status = "ready";
         })
         .catch((error) => {
@@ -2864,14 +2898,53 @@
         });
     }
 
-    function drawCenterStarWebGLNode(node, x, y, selected, time) {
+    function getCenterStarWebGLPalette(star) {
+      const bright = mixColor(star.coreColor, [255, 255, 255], star.starType === "blue" ? 0.26 : 0.18);
+      const dark = mixColor(star.haloColor, star.coreColor, 0.34);
+      const glow = mixColor(star.haloColor, star.coreColor, 0.18);
+
+      return { bright, dark, glow };
+    }
+
+    function setThreeColorFromRgb(color, rgb) {
+      color.setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+    }
+
+    function syncCenterStarWebGLPalette(star) {
+      const estrella = centerStarWebGL.estrella;
+      if (!estrella) return;
+
+      const signature = [
+        star.starType,
+        star.starVariant || "base",
+        star.coreColor.join(","),
+        star.haloColor.join(",")
+      ].join(":");
+
+      if (centerStarWebGL.paletteSignature === signature) return;
+
+      const palette = getCenterStarWebGLPalette(star);
+      setThreeColorFromRgb(estrella.surfaceMaterial.uniforms.colorBright.value, palette.bright);
+      setThreeColorFromRgb(estrella.surfaceMaterial.uniforms.colorDark.value, palette.dark);
+      estrella.glowMaterial.uniforms.colorMultiplier.value.set(
+        palette.glow[0] / 255,
+        palette.glow[1] / 255,
+        palette.glow[2] / 255,
+        1
+      );
+      centerStarWebGL.paletteSignature = signature;
+    }
+
+    function drawCenterStarWebGLNode(node, x, y, selected, time, radiusScale = 1) {
       ensureCenterStarWebGL();
 
       if (centerStarWebGL.status !== "ready") {
         return null;
       }
 
-      const starRadius = node.visualRadius * (selected ? 1.92 : 1.82);
+      syncCenterStarWebGLPalette(getCenterStarProfile());
+
+      const starRadius = node.visualRadius * radiusScale * (selected ? 1.92 : 1.82);
       const renderSize = CENTER_STAR_WEBGL_RENDER_SIZE;
       const imageSize = (starRadius / CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS) * renderSize;
 
@@ -2890,14 +2963,14 @@
       return starRadius;
     }
 
-    function drawCenterStarNode(node, x, y, selected, time) {
-      const webglStarRadius = drawCenterStarWebGLNode(node, x, y, selected, time);
+    function drawCenterStarNode(node, x, y, selected, time, radiusScale = 1) {
+      const webglStarRadius = drawCenterStarWebGLNode(node, x, y, selected, time, radiusScale);
       if (webglStarRadius !== null) {
         return webglStarRadius;
       }
 
       const star = getCenterStarProfile();
-      const starRadius = node.visualRadius * (selected ? 1.92 : 1.82);
+      const starRadius = node.visualRadius * radiusScale * (selected ? 1.92 : 1.82);
       const surfaceCanvas = updateCenterStarSurface(time, star, activeMapId || 1);
       const haloPulse = 1 + Math.sin(time * 0.0018 + node.labelFloatSeed) * 0.025;
       const auraRadius = starRadius * star.auraScale * 0.9 * haloPulse;
@@ -2971,42 +3044,46 @@
     }
 
     function drawNode(node, time) {
-      const x = node.renderX + camera.x;
-      const y = node.renderY + camera.y;
+      const point = projectWorldPoint(node.renderX, node.renderY);
+      const x = point.x;
+      const y = point.y;
+      const zoom = camera.zoom;
+      const scaledVisualRadius = node.visualRadius * zoom;
       const selected = node.id === selectedNodeId;
       const displayLabel = getNodeDisplayTitle(node);
-      let renderedRadius = node.visualRadius;
+      let renderedRadius = scaledVisualRadius;
 
       if (selected && !node.isCenter) {
-        const aura = 12 + Math.sin(time * 0.004 + node.labelFloatSeed) * 1.5;
+        const aura = (12 + Math.sin(time * 0.004 + node.labelFloatSeed) * 1.5) * zoom;
         ctx.beginPath();
-        ctx.arc(x, y, node.visualRadius + aura, 0, Math.PI * 2);
+        ctx.arc(x, y, scaledVisualRadius + aura, 0, Math.PI * 2);
         ctx.fillStyle = "rgba(220, 234, 246, 0.08)";
         ctx.fill();
       }
 
       if (node.isCenter) {
-        renderedRadius = drawCenterStarNode(node, x, y, selected, time);
+        renderedRadius = drawCenterStarNode(node, x, y, selected, time, zoom);
       } else {
         ctx.beginPath();
-        ctx.arc(x, y, node.visualRadius, 0, Math.PI * 2);
+        ctx.arc(x, y, scaledVisualRadius, 0, Math.PI * 2);
         ctx.fillStyle = selected
           ? "rgba(250, 253, 255, 1)"
           : "rgba(190, 205, 218, 0.92)";
         ctx.fill();
 
         ctx.beginPath();
-        ctx.arc(x, y, node.visualRadius + 2.4, 0, Math.PI * 2);
+        ctx.arc(x, y, scaledVisualRadius + 2.4 * zoom, 0, Math.PI * 2);
         ctx.strokeStyle = selected
           ? "rgba(240, 247, 252, 0.22)"
           : "rgba(210, 226, 239, 0.08)";
-        ctx.lineWidth = 1;
+        ctx.lineWidth = Math.max(0.6, zoom);
         ctx.stroke();
       }
 
-      const labelYOffset = renderedRadius + 18 + Math.sin(time * 0.002 + node.labelFloatSeed) * 1.2;
+      const labelScale = clamp(Math.pow(zoom, 0.86), 0.6, 1.9);
+      const labelYOffset = renderedRadius + 18 * labelScale + Math.sin(time * 0.002 + node.labelFloatSeed) * 1.2 * labelScale;
       ctx.fillStyle = selected ? "#f3f8fc" : "#c7d2dc";
-      ctx.font = `${selected ? 13 : 12}px Inter, sans-serif`;
+      ctx.font = `${(selected ? 13 : 12) * labelScale}px Inter, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(trimText(displayLabel, selected ? 22 : 18), x, y + labelYOffset);
@@ -4107,11 +4184,10 @@
     function positionEditor() {
       const node = getNodeById(editingNodeId);
       if (!node) return;
-      const x = node.renderX + camera.x;
-      const y = node.renderY + camera.y;
+      const point = projectWorldPoint(node.renderX, node.renderY);
       editor.style.display = "block";
       editor.classList.add("is-visible");
-      positionFloatingPanel(editor, x, y, 34);
+      positionFloatingPanel(editor, point.x, point.y, 34);
     }
 
     function openEditor(node) {
@@ -4266,6 +4342,28 @@
         saveState(true);
       }, 140);
     }
+
+    canvas.addEventListener("wheel", (e) => {
+      if (mapsOverlayOpen) return;
+
+      e.preventDefault();
+
+      const { x, y } = pointerPosition(e);
+      const worldBefore = screenToWorld(
+        x,
+        y,
+        camera.targetZoom,
+        camera.targetX,
+        camera.targetY
+      );
+      const zoomFactor = Math.exp(-e.deltaY * 0.0012);
+      const nextZoom = clamp(camera.targetZoom * zoomFactor, D0_ZOOM_MIN, D0_ZOOM_MAX);
+
+      camera.targetZoom = nextZoom;
+      camera.targetX = x - worldBefore.x * nextZoom;
+      camera.targetY = y - worldBefore.y * nextZoom;
+      scheduleSave();
+    }, { passive: false });
 
     canvas.addEventListener("mousedown", (e) => {
       if (mapsOverlayOpen) return;
