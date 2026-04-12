@@ -751,8 +751,13 @@
       seed: 0,
       imageData: null
     };
-    const CENTER_STAR_WEBGL_RENDER_SIZE = 320;
-    const CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS = 82;
+    const CENTER_STAR_WEBGL_RENDER_SIZE = 384;
+    const CENTER_STAR_WEBGL_RADIUS = 1.15;
+    const CENTER_STAR_WEBGL_CAMERA_FOV = 42;
+    const CENTER_STAR_WEBGL_CAMERA_DISTANCE = 8.7;
+    const CENTER_STAR_WEBGL_VIEW_HEIGHT = 2 * CENTER_STAR_WEBGL_CAMERA_DISTANCE * Math.tan(CENTER_STAR_WEBGL_CAMERA_FOV * Math.PI / 360);
+    const CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS = (CENTER_STAR_WEBGL_RADIUS / CENTER_STAR_WEBGL_VIEW_HEIGHT) * CENTER_STAR_WEBGL_RENDER_SIZE;
+    const CENTER_STAR_BASE_SIZE = 1.15;
     const centerStarWebGL = {
       status: "idle",
       THREE: null,
@@ -760,6 +765,7 @@
       scene: null,
       camera: null,
       estrella: null,
+      glowTexture: null,
       paletteSignature: ""
     };
 
@@ -2850,6 +2856,43 @@
       return cache.canvas;
     }
 
+    function createCenterStarNeutralGlowTexture(THREE) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 256;
+      canvas.height = 256;
+
+      const textureCtx = canvas.getContext("2d");
+      const gradient = textureCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      gradient.addColorStop(0, "rgba(255, 255, 255, 1)");
+      gradient.addColorStop(0.2, "rgba(255, 255, 255, 0.9)");
+      gradient.addColorStop(0.46, "rgba(255, 255, 255, 0.42)");
+      gradient.addColorStop(0.72, "rgba(255, 255, 255, 0.13)");
+      gradient.addColorStop(0.92, "rgba(255, 255, 255, 0.025)");
+      gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+      textureCtx.fillStyle = gradient;
+      textureCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
+    function ensureCenterStarNeutralGlowTexture(THREE, estrella) {
+      if (!THREE || !estrella || !estrella.glowMaterial) return;
+
+      if (!centerStarWebGL.glowTexture) {
+        centerStarWebGL.glowTexture = createCenterStarNeutralGlowTexture(THREE);
+      }
+
+      const currentGlowTexture = estrella.glowMaterial.uniforms.colorTexture.value;
+      if (currentGlowTexture === centerStarWebGL.glowTexture) return;
+
+      estrella.glowMaterial.uniforms.colorTexture.value = centerStarWebGL.glowTexture;
+      estrella.glowMaterial.needsUpdate = true;
+      currentGlowTexture?.dispose?.();
+      centerStarWebGL.paletteSignature = "";
+    }
+
     function ensureCenterStarWebGL() {
       if (centerStarWebGL.status !== "idle") return;
 
@@ -2858,7 +2901,7 @@
         import("three"),
         import("./motor-estrella-offline.js")
       ])
-        .then(([THREE, starModule]) => {
+        .then(async ([THREE, starModule]) => {
           const renderer = new THREE.WebGLRenderer({
             alpha: true,
             antialias: true,
@@ -2873,11 +2916,11 @@
           renderer.toneMappingExposure = 1.18;
 
           const scene = new THREE.Scene();
-          const camera3d = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-          camera3d.position.set(0, 0.15, 5.9);
+          const camera3d = new THREE.PerspectiveCamera(CENTER_STAR_WEBGL_CAMERA_FOV, 1, 0.1, 100);
+          camera3d.position.set(0, 0.15, CENTER_STAR_WEBGL_CAMERA_DISTANCE);
 
           const estrella = new starModule.EstrellaAnimada({
-            radius: 1.15,
+            radius: CENTER_STAR_WEBGL_RADIUS,
             starType: "G"
           });
           estrella.setCoronaVisible(false);
@@ -2890,6 +2933,9 @@
           centerStarWebGL.camera = camera3d;
           centerStarWebGL.estrella = estrella;
           centerStarWebGL.paletteSignature = "";
+
+          await estrella.ready;
+          ensureCenterStarNeutralGlowTexture(THREE, estrella);
           centerStarWebGL.status = "ready";
         })
         .catch((error) => {
@@ -2899,11 +2945,15 @@
     }
 
     function getCenterStarWebGLPalette(star) {
-      const bright = mixColor(star.coreColor, [255, 255, 255], star.starType === "blue" ? 0.26 : 0.18);
+      const isBlue = star.starType === "blue";
+      const bright = mixColor(star.coreColor, [255, 255, 255], isBlue ? 0.34 : 0.18);
       const dark = mixColor(star.haloColor, star.coreColor, 0.34);
-      const glow = mixColor(star.haloColor, star.coreColor, 0.18);
+      const glow = isBlue
+        ? mixColor(star.haloColor, star.coreColor, 0.38)
+        : mixColor(star.haloColor, star.coreColor, 0.18);
+      const glowAlpha = isBlue ? 1.55 : 1;
 
-      return { bright, dark, glow };
+      return { bright, dark, glow, glowAlpha };
     }
 
     function setThreeColorFromRgb(color, rgb) {
@@ -2913,6 +2963,8 @@
     function syncCenterStarWebGLPalette(star) {
       const estrella = centerStarWebGL.estrella;
       if (!estrella) return;
+
+      ensureCenterStarNeutralGlowTexture(centerStarWebGL.THREE, estrella);
 
       const signature = [
         star.starType,
@@ -2932,6 +2984,7 @@
         palette.glow[2] / 255,
         1
       );
+      estrella.glowMaterial.uniforms.alphaMultiplier.value = palette.glowAlpha;
       centerStarWebGL.paletteSignature = signature;
     }
 
@@ -2944,7 +2997,7 @@
 
       syncCenterStarWebGLPalette(getCenterStarProfile());
 
-      const starRadius = node.visualRadius * radiusScale * (selected ? 1.92 : 1.82);
+      const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * (selected ? 1.92 : 1.82);
       const renderSize = CENTER_STAR_WEBGL_RENDER_SIZE;
       const imageSize = (starRadius / CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS) * renderSize;
 
@@ -2970,7 +3023,7 @@
       }
 
       const star = getCenterStarProfile();
-      const starRadius = node.visualRadius * radiusScale * (selected ? 1.92 : 1.82);
+      const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * (selected ? 1.92 : 1.82);
       const surfaceCanvas = updateCenterStarSurface(time, star, activeMapId || 1);
       const haloPulse = 1 + Math.sin(time * 0.0018 + node.labelFloatSeed) * 0.025;
       const auraRadius = starRadius * star.auraScale * 0.9 * haloPulse;
