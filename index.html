@@ -4,6 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Diagrama Orgánico Sobrio</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js"
+      }
+    }
+  </script>
   <style>
     :root {
       --bg-top: #0f1a22;
@@ -739,6 +746,16 @@
       signature: "",
       seed: 0,
       imageData: null
+    };
+    const CENTER_STAR_WEBGL_RENDER_SIZE = 320;
+    const CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS = 82;
+    const centerStarWebGL = {
+      status: "idle",
+      THREE: null,
+      renderer: null,
+      scene: null,
+      camera: null,
+      estrella: null
     };
 
     function resize() {
@@ -2800,13 +2817,90 @@
       return cache.canvas;
     }
 
+    function ensureCenterStarWebGL() {
+      if (centerStarWebGL.status !== "idle") return;
+
+      centerStarWebGL.status = "loading";
+      Promise.all([
+        import("three"),
+        import("./motor-estrella-offline.js")
+      ])
+        .then(([THREE, starModule]) => {
+          const renderer = new THREE.WebGLRenderer({
+            alpha: true,
+            antialias: true,
+            premultipliedAlpha: false,
+            preserveDrawingBuffer: true
+          });
+          renderer.setPixelRatio(1);
+          renderer.setSize(CENTER_STAR_WEBGL_RENDER_SIZE, CENTER_STAR_WEBGL_RENDER_SIZE, false);
+          renderer.setClearColor(0x000000, 0);
+          renderer.outputColorSpace = THREE.SRGBColorSpace;
+          renderer.toneMapping = THREE.ACESFilmicToneMapping;
+          renderer.toneMappingExposure = 1.18;
+
+          const scene = new THREE.Scene();
+          const camera3d = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+          camera3d.position.set(0, 0.15, 5.9);
+
+          const estrella = new starModule.EstrellaAnimada({
+            radius: 1.15,
+            starType: "G"
+          });
+          estrella.setCoronaVisible(false);
+
+          scene.add(estrella.object3d);
+
+          centerStarWebGL.THREE = THREE;
+          centerStarWebGL.renderer = renderer;
+          centerStarWebGL.scene = scene;
+          centerStarWebGL.camera = camera3d;
+          centerStarWebGL.estrella = estrella;
+          centerStarWebGL.status = "ready";
+        })
+        .catch((error) => {
+          centerStarWebGL.status = "failed";
+          console.warn("No se pudo iniciar la estrella WebGL:", error);
+        });
+    }
+
+    function drawCenterStarWebGLNode(node, x, y, selected, time) {
+      ensureCenterStarWebGL();
+
+      if (centerStarWebGL.status !== "ready") {
+        return null;
+      }
+
+      const starRadius = node.visualRadius * (selected ? 1.92 : 1.82);
+      const renderSize = CENTER_STAR_WEBGL_RENDER_SIZE;
+      const imageSize = (starRadius / CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS) * renderSize;
+
+      centerStarWebGL.estrella.update(time * 0.001, centerStarWebGL.camera);
+      centerStarWebGL.renderer.clear();
+      centerStarWebGL.renderer.render(centerStarWebGL.scene, centerStarWebGL.camera);
+
+      ctx.drawImage(
+        centerStarWebGL.renderer.domElement,
+        x - imageSize * 0.5,
+        y - imageSize * 0.5,
+        imageSize,
+        imageSize
+      );
+
+      return starRadius;
+    }
+
     function drawCenterStarNode(node, x, y, selected, time) {
+      const webglStarRadius = drawCenterStarWebGLNode(node, x, y, selected, time);
+      if (webglStarRadius !== null) {
+        return webglStarRadius;
+      }
+
       const star = getCenterStarProfile();
       const starRadius = node.visualRadius * (selected ? 1.92 : 1.82);
       const surfaceCanvas = updateCenterStarSurface(time, star, activeMapId || 1);
       const haloPulse = 1 + Math.sin(time * 0.0018 + node.labelFloatSeed) * 0.025;
       const auraRadius = starRadius * star.auraScale * 0.9 * haloPulse;
-      const outerCoronaRadius = starRadius * 2.2 * haloPulse;
 
       const aura = ctx.createRadialGradient(x, y, 0, x, y, auraRadius);
       aura.addColorStop(0, rgba(star.haloColor, 0.18 * star.starLuminosity));
@@ -2816,15 +2910,6 @@
       ctx.fillStyle = aura;
       ctx.beginPath();
       ctx.arc(x, y, auraRadius, 0, Math.PI * 2);
-      ctx.fill();
-
-      const corona = ctx.createRadialGradient(x, y, 0, x, y, outerCoronaRadius);
-      corona.addColorStop(0, rgba(star.haloColor, 0.08 * star.starLuminosity));
-      corona.addColorStop(0.28, rgba(star.haloColor, 0.032));
-      corona.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = corona;
-      ctx.beginPath();
-      ctx.arc(x, y, outerCoronaRadius, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.save();
