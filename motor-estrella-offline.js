@@ -292,7 +292,7 @@ function createFallbackSurfaceTexture() {
   canvas.height = 512;
 
   const ctx = canvas.getContext("2d");
-  const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
   gradient.addColorStop(0, "#dfdfdf");
   gradient.addColorStop(0.35, "#909090");
   gradient.addColorStop(0.65, "#f4f4f4");
@@ -312,13 +312,17 @@ function createFallbackSurfaceTexture() {
     const radius = 1 + Math.random() * 10;
     const alpha = 0.025 + Math.random() * 0.03;
     const tone = 170 + Math.floor(Math.random() * 70);
-    const blob = ctx.createRadialGradient(x, y, 0, x, y, radius);
-    blob.addColorStop(0, `rgba(${tone}, ${tone}, ${tone}, ${alpha})`);
-    blob.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = blob;
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fill();
+    // Repite cada mancha en X para ocultar la union UV de la esfera.
+    for (const offsetX of [-canvas.width, 0, canvas.width]) {
+      const tileX = x + offsetX;
+      const blob = ctx.createRadialGradient(tileX, y, 0, tileX, y, radius);
+      blob.addColorStop(0, `rgba(${tone}, ${tone}, ${tone}, ${alpha})`);
+      blob.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = blob;
+      ctx.beginPath();
+      ctx.arc(tileX, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   const texture = new THREE.CanvasTexture(canvas);
