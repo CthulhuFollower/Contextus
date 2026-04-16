@@ -662,12 +662,19 @@
     const UNIVERSE_BACKDROP_TILE_SIZE = 960;
     const UNIVERSE_BACKDROP_REFERENCE_AREA = 2100 * 1260;
     const STAR_TYPE_WEIGHTS = [
-      { type: "yellow", weight: 36 },
-      { type: "orange", weight: 28 },
-      { type: "red", weight: 22 },
-      { type: "blue", weight: 14 }
+      { type: "yellow", weight: 25 },
+      { type: "orange", weight: 15 },
+      { type: "red", weight: 15 },
+      { type: "blue", weight: 10 },
+      { type: "white", weight: 35 }
     ];
     const STAR_RED_GIANT_PROBABILITY = 0.12;
+    const WHITE_STAR_VARIANT_WEIGHTS = [
+      { variant: "pure", weight: 28 },
+      { variant: "blue", weight: 30 },
+      { variant: "violet", weight: 18 },
+      { variant: "warm", weight: 24 }
+    ];
     const STAR_TYPE_PROFILES = {
       blue: {
         coreColor: [118, 162, 255],
@@ -736,6 +743,83 @@
         outlineAlpha: 0.13,
         pulseScale: 0.013,
         orbitSpeed: 0.88
+      },
+      white: {
+        coreColor: [248, 251, 255],
+        haloColor: [210, 224, 255],
+        outlineColor: [255, 255, 255],
+        scaleRange: [0.95, 1.22],
+        luminosityRange: [1.04, 1.2],
+        auraScale: 3.02,
+        auraAlpha: 0.165,
+        bodyAlpha: 0.62,
+        whiteCoreAlpha: 0.99,
+        whiteCoreScale: 0.38,
+        spikeAlpha: 0.42,
+        spikeLength: 3.85,
+        outlineAlpha: 0.19,
+        pulseScale: 0.015,
+        orbitSpeed: 1.04
+      }
+    };
+    const STAR_VARIANT_PROFILES = {
+      red: {
+        giant: {
+          scaleRange: [1.35, 1.85],
+          luminosityRange: [1.02, 1.18],
+          auraScale: 3.5,
+          auraAlpha: 0.18,
+          bodyAlpha: 0.6,
+          whiteCoreAlpha: 0.9,
+          whiteCoreScale: 0.26,
+          spikeAlpha: 0.24,
+          spikeLength: 4.4,
+          outlineAlpha: 0.12,
+          pulseScale: 0.011,
+          orbitSpeed: 0.72
+        }
+      },
+      white: {
+        blue: {
+          coreColor: [232, 244, 255],
+          haloColor: [150, 194, 255],
+          outlineColor: [246, 251, 255],
+          scaleRange: [1.02, 1.34],
+          luminosityRange: [1.08, 1.27],
+          auraScale: 3.18,
+          spikeAlpha: 0.45,
+          orbitSpeed: 1.1
+        },
+        violet: {
+          coreColor: [246, 240, 255],
+          haloColor: [182, 154, 255],
+          outlineColor: [255, 250, 255],
+          scaleRange: [0.98, 1.26],
+          luminosityRange: [1.06, 1.24],
+          auraScale: 3.1,
+          spikeAlpha: 0.43,
+          orbitSpeed: 1.06
+        },
+        warm: {
+          coreColor: [255, 248, 232],
+          haloColor: [255, 216, 144],
+          outlineColor: [255, 252, 240],
+          scaleRange: [0.92, 1.18],
+          luminosityRange: [1.02, 1.18],
+          auraScale: 2.94,
+          spikeAlpha: 0.38,
+          orbitSpeed: 1
+        },
+        pure: {
+          coreColor: [250, 252, 255],
+          haloColor: [218, 228, 255],
+          outlineColor: [255, 255, 255],
+          scaleRange: [0.95, 1.22],
+          luminosityRange: [1.04, 1.2],
+          auraScale: 3.02,
+          spikeAlpha: 0.42,
+          orbitSpeed: 1.04
+        }
       }
     };
     const universeBackdropCache = {
@@ -882,46 +966,52 @@
 
     function getStarTypeTemplate(starType, starVariant = null) {
       const base = STAR_TYPE_PROFILES[starType] || STAR_TYPE_PROFILES.yellow;
-      if (starType !== "red" || starVariant !== "giant") {
-        return base;
-      }
-
-      return {
-        ...base,
-        scaleRange: [1.35, 1.85],
-        luminosityRange: [1.02, 1.18],
-        auraScale: 3.5,
-        auraAlpha: 0.18,
-        bodyAlpha: 0.6,
-        whiteCoreAlpha: 0.9,
-        whiteCoreScale: 0.26,
-        spikeAlpha: 0.24,
-        spikeLength: 4.4,
-        outlineAlpha: 0.12,
-        pulseScale: 0.011,
-        orbitSpeed: 0.72
-      };
+      const variant = STAR_VARIANT_PROFILES[starType] && STAR_VARIANT_PROFILES[starType][starVariant];
+      return variant ? { ...base, ...variant } : base;
     }
 
-    function pickWeightedStarType() {
-      const totalWeight = STAR_TYPE_WEIGHTS.reduce((sum, entry) => sum + entry.weight, 0);
-      let roll = Math.random() * totalWeight;
+    function pickWeightedEntry(entries, value = null) {
+      const totalWeight = entries.reduce((sum, entry) => sum + entry.weight, 0);
+      const rollValue = Number.isFinite(value) ? clamp(value, 0, 0.999999) : Math.random();
+      let roll = rollValue * totalWeight;
 
-      for (const entry of STAR_TYPE_WEIGHTS) {
+      for (const entry of entries) {
         roll -= entry.weight;
         if (roll <= 0) {
-          return entry.type;
+          return entry;
         }
       }
 
-      return STAR_TYPE_WEIGHTS[STAR_TYPE_WEIGHTS.length - 1].type;
+      return entries[entries.length - 1];
+    }
+
+    function pickWeightedStarType() {
+      return pickWeightedEntry(STAR_TYPE_WEIGHTS).type;
+    }
+
+    function isValidStarVariant(starType, starVariant) {
+      return Boolean(
+        starVariant &&
+        STAR_VARIANT_PROFILES[starType] &&
+        STAR_VARIANT_PROFILES[starType][starVariant]
+      );
+    }
+
+    function pickStarVariant(starType) {
+      if (starType === "red") {
+        return Math.random() < STAR_RED_GIANT_PROBABILITY ? "giant" : null;
+      }
+
+      if (starType === "white") {
+        return pickWeightedEntry(WHITE_STAR_VARIANT_WEIGHTS).variant;
+      }
+
+      return null;
     }
 
     function createRandomStarIdentity() {
       const starType = pickWeightedStarType();
-      const starVariant = starType === "red" && Math.random() < STAR_RED_GIANT_PROBABILITY
-        ? "giant"
-        : null;
+      const starVariant = pickStarVariant(starType);
       const template = getStarTypeTemplate(starType, starVariant);
 
       return {
@@ -938,9 +1028,10 @@
         : null;
       if (!STAR_TYPE_PROFILES[starType]) return null;
 
-      const starVariant = starType === "red" && rawMap && rawMap.starVariant === "giant"
-        ? "giant"
+      const rawStarVariant = typeof (rawMap && rawMap.starVariant) === "string"
+        ? rawMap.starVariant
         : null;
+      const starVariant = isValidStarVariant(starType, rawStarVariant) ? rawStarVariant : null;
       const template = getStarTypeTemplate(starType, starVariant);
       const scale = Number(rawMap && rawMap.starScale);
       const luminosity = Number(rawMap && rawMap.starLuminosity);
@@ -2741,11 +2832,28 @@
     }
 
     function getCenterStarSurfacePalette(star) {
-      const deepShadow = mixColor(star.haloColor, [16, 5, 4], 0.72);
-      const emberDark = mixColor(star.haloColor, [42, 14, 8], 0.44);
+      const isCool = star.starType === "blue" || star.starType === "white";
+      const deepShadowTarget = isCool ? [8, 12, 32] : [16, 5, 4];
+      const emberTarget = star.starType === "blue"
+        ? [26, 48, 106]
+        : star.starType === "white"
+          ? [58, 62, 92]
+          : [42, 14, 8];
+      const midTarget = star.starType === "blue"
+        ? [176, 205, 255]
+        : star.starType === "white"
+          ? mixColor(star.coreColor, [255, 255, 255], 0.52)
+          : [255, 214, 148];
+      const hotTarget = star.starType === "blue"
+        ? [224, 238, 255]
+        : star.starType === "white"
+          ? [255, 255, 255]
+          : [255, 236, 182];
+      const deepShadow = mixColor(star.haloColor, deepShadowTarget, 0.72);
+      const emberDark = mixColor(star.haloColor, emberTarget, 0.44);
       const moltenBase = mixColor(star.haloColor, star.coreColor, 0.34);
-      const moltenMid = mixColor(star.coreColor, [255, 214, 148], 0.2);
-      const moltenHot = mixColor(star.coreColor, [255, 236, 182], star.starType === "blue" ? 0.42 : 0.34);
+      const moltenMid = mixColor(star.coreColor, midTarget, 0.2);
+      const moltenHot = mixColor(star.coreColor, hotTarget, isCool ? 0.42 : 0.34);
       const whiteHot = mixColor(moltenHot, [255, 255, 246], 0.54);
       const rim = mixColor(star.haloColor, [0, 0, 0], 0.28);
 
@@ -2944,14 +3052,49 @@
         });
     }
 
+    function getCenterStarVisualMetrics(star) {
+      const starScale = Number.isFinite(star && star.starScale) ? star.starScale : 1;
+      const starLuminosity = Number.isFinite(star && star.starLuminosity) ? star.starLuminosity : 1;
+      const isBlue = star && star.starType === "blue";
+      const isWhite = star && star.starType === "white";
+      const isGiant = star && star.starVariant === "giant";
+      const coreScale = clamp(starScale, 0.84, isGiant ? 1.68 : 1.5);
+      const luminosityLift = starLuminosity - 1;
+      const glowScale = clamp(
+        4.5 +
+          luminosityLift * 2.05 +
+          (coreScale - 1) * 0.68 +
+          (isGiant ? 0.24 : 0) +
+          (isBlue || isWhite ? 0.1 : 0),
+        4.15,
+        5.55
+      );
+      const glowAlphaScale = clamp(0.9 + luminosityLift * 0.78, 0.78, 1.28);
+      const rotationSpeed = 0.016 * clamp(star && star.orbitSpeed ? star.orbitSpeed : 1, 0.66, 1.18) / Math.sqrt(coreScale);
+
+      return {
+        coreScale,
+        glowScale,
+        glowAlphaScale,
+        rotationSpeed
+      };
+    }
+
     function getCenterStarWebGLPalette(star) {
       const isBlue = star.starType === "blue";
-      const bright = mixColor(star.coreColor, [255, 255, 255], isBlue ? 0.34 : 0.18);
-      const dark = mixColor(star.haloColor, star.coreColor, 0.34);
+      const isWhite = star.starType === "white";
+      const isGiant = star.starVariant === "giant";
+      const metrics = getCenterStarVisualMetrics(star);
+      const bright = mixColor(star.coreColor, [255, 255, 255], isBlue ? 0.34 : isWhite ? 0.46 : 0.18);
+      const dark = isWhite
+        ? mixColor(star.haloColor, star.coreColor, 0.22)
+        : mixColor(star.haloColor, star.coreColor, isGiant ? 0.42 : 0.34);
       const glow = isBlue
         ? mixColor(star.haloColor, star.coreColor, 0.38)
-        : mixColor(star.haloColor, star.coreColor, 0.18);
-      const glowAlpha = isBlue ? 1.55 : 1;
+        : isWhite
+          ? mixColor(star.haloColor, star.coreColor, 0.32)
+          : mixColor(star.haloColor, star.coreColor, 0.18);
+      const glowAlpha = (isBlue ? 1.34 : isWhite ? 1.24 : isGiant ? 1.1 : 1) * metrics.glowAlphaScale;
 
       return { bright, dark, glow, glowAlpha };
     }
@@ -2969,6 +3112,8 @@
       const signature = [
         star.starType,
         star.starVariant || "base",
+        star.starScale,
+        star.starLuminosity,
         star.coreColor.join(","),
         star.haloColor.join(",")
       ].join(":");
@@ -2976,8 +3121,12 @@
       if (centerStarWebGL.paletteSignature === signature) return;
 
       const palette = getCenterStarWebGLPalette(star);
+      const metrics = getCenterStarVisualMetrics(star);
       setThreeColorFromRgb(estrella.surfaceMaterial.uniforms.colorBright.value, palette.bright);
       setThreeColorFromRgb(estrella.surfaceMaterial.uniforms.colorDark.value, palette.dark);
+      estrella.options.glowScale = metrics.glowScale;
+      estrella.setRadius(CENTER_STAR_WEBGL_RADIUS);
+      estrella.setRotationSpeed(metrics.rotationSpeed);
       estrella.glowMaterial.uniforms.colorMultiplier.value.set(
         palette.glow[0] / 255,
         palette.glow[1] / 255,
@@ -2995,9 +3144,11 @@
         return null;
       }
 
-      syncCenterStarWebGLPalette(getCenterStarProfile());
+      const star = getCenterStarProfile();
+      const metrics = getCenterStarVisualMetrics(star);
+      syncCenterStarWebGLPalette(star);
 
-      const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * (selected ? 1.92 : 1.82);
+      const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * metrics.coreScale * (selected ? 1.92 : 1.82);
       const renderSize = CENTER_STAR_WEBGL_RENDER_SIZE;
       const imageSize = (starRadius / CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS) * renderSize;
 
@@ -3023,14 +3174,15 @@
       }
 
       const star = getCenterStarProfile();
-      const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * (selected ? 1.92 : 1.82);
+      const metrics = getCenterStarVisualMetrics(star);
+      const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * metrics.coreScale * (selected ? 1.92 : 1.82);
       const surfaceCanvas = updateCenterStarSurface(time, star, activeMapId || 1);
       const haloPulse = 1 + Math.sin(time * 0.0018 + node.labelFloatSeed) * 0.025;
-      const auraRadius = starRadius * star.auraScale * 0.9 * haloPulse;
+      const auraRadius = starRadius * star.auraScale * 0.9 * haloPulse * clamp(metrics.glowScale / 5, 0.84, 1.14);
 
       const aura = ctx.createRadialGradient(x, y, 0, x, y, auraRadius);
-      aura.addColorStop(0, rgba(star.haloColor, 0.18 * star.starLuminosity));
-      aura.addColorStop(0.34, rgba(star.haloColor, 0.09 * star.starLuminosity));
+      aura.addColorStop(0, rgba(star.haloColor, 0.18 * star.starLuminosity * metrics.glowAlphaScale));
+      aura.addColorStop(0.34, rgba(star.haloColor, 0.09 * star.starLuminosity * metrics.glowAlphaScale));
       aura.addColorStop(0.7, rgba(star.haloColor, 0.028));
       aura.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = aura;
@@ -3252,7 +3404,7 @@
       return clamp(
         summary.visualRadius * star.starScale * getConstellationVisualScale(zoom),
         14,
-        star.starVariant === "giant" ? 78 : 58
+        getConstellationMaxRadiusForStar(star)
       );
     }
 
@@ -3414,6 +3566,21 @@
       return clamp(Math.pow(Math.max(zoom, 0.0001), 0.58), 0.56, 2.05);
     }
 
+    function getConstellationMaxRadiusForStar(star) {
+      const starScale = Number.isFinite(star && star.starScale) ? star.starScale : 1;
+      const starLuminosity = Number.isFinite(star && star.starLuminosity) ? star.starLuminosity : 1;
+      const scaledLimit =
+        58 +
+        Math.max(0, starScale - 1.18) * 42 +
+        Math.max(0, starLuminosity - 1.08) * 34;
+      const giantFloor = star && star.starVariant === "giant" ? 82 : 58;
+      return clamp(Math.max(scaledLimit, giantFloor), 58, 88);
+    }
+
+    function getConstellationHitRadiusForStar(star, radius) {
+      return clamp(radius + 18, 30, getConstellationMaxRadiusForStar(star) + 24);
+    }
+
     function centerMapsCameraOnActive(snap = false) {
       const orderedMaps = getOrderedMaps();
       if (!orderedMaps.length) return;
@@ -3548,11 +3715,13 @@
         ? 0.085
         : star.starType === "blue"
           ? 0.19
-          : star.starType === "yellow"
-            ? 0.168
-            : star.starType === "orange"
-              ? 0.146
-              : 0.132;
+          : star.starType === "white"
+            ? 0.18
+            : star.starType === "yellow"
+              ? 0.168
+              : star.starType === "orange"
+                ? 0.146
+                : 0.132;
       const stateDamping = item.isActive ? 0.94 : hovered ? 1.08 : 1.42;
       const amplitude = baseAmplitude * stateDamping;
 
@@ -3638,11 +3807,13 @@
         ? 0.092
         : star.starType === "blue"
           ? 0.078
-          : star.starType === "yellow"
-            ? 0.07
-            : star.starType === "orange"
-              ? 0.064
-              : 0.06;
+          : star.starType === "white"
+            ? 0.074
+            : star.starType === "yellow"
+              ? 0.07
+              : star.starType === "orange"
+                ? 0.064
+                : 0.06;
       const stateDamping = item.isActive ? 0.9 : hovered ? 0.95 : 1;
       const amplitude = baseAmplitude * stateDamping;
 
@@ -3687,13 +3858,15 @@
       const seed = item.summary.seed + item.mapId * 0.541;
       const baseAmplitude = star.starType === "blue"
         ? 0.2
-        : star.starType === "yellow"
-          ? 0.17
-          : star.starType === "orange"
-            ? 0.145
-            : star.starVariant === "giant"
-              ? 0.14
-              : 0.125;
+        : star.starType === "white"
+          ? 0.18
+          : star.starType === "yellow"
+            ? 0.17
+            : star.starType === "orange"
+              ? 0.145
+              : star.starVariant === "giant"
+                ? 0.14
+                : 0.125;
       const stateDamping = item.isActive ? 0.92 : hovered ? 0.96 : 1;
       const amplitude = baseAmplitude * stateDamping;
 
@@ -3753,7 +3926,7 @@
       const radius = clamp(
         summary.visualRadius * star.starScale * getConstellationVisualScale(),
         14,
-        star.starVariant === "giant" ? 78 : 58
+        getConstellationMaxRadiusForStar(star)
       );
       const blocked = Boolean(target);
       const worldPoint = screenToConstellationWorld(overlayPointer.x, overlayPointer.y);
@@ -3891,13 +4064,15 @@
 
       const diagonalVisibility = star.starType === "blue"
         ? 1
-        : star.starVariant === "giant"
-          ? 0.98
-          : star.starType === "yellow"
-            ? 0.9
-            : star.starType === "orange"
-              ? 0.84
-              : 0.78;
+        : star.starType === "white"
+          ? 0.96
+          : star.starVariant === "giant"
+            ? 0.98
+            : star.starType === "yellow"
+              ? 0.9
+              : star.starType === "orange"
+                ? 0.84
+                : 0.78;
 
       drawStarFlareArm(
         item.x,
@@ -4043,7 +4218,7 @@
         const radius = clamp(
           summary.visualRadius * star.starScale * (isActive ? 1.16 : 1) * visualScale,
           14,
-          star.starVariant === "giant" ? 78 : 58
+          getConstellationMaxRadiusForStar(star)
         );
         const renderPadding = Math.max(180, radius * 6.4);
         const isVisible =
@@ -4065,7 +4240,7 @@
           driftX,
           driftY,
           radius,
-          hitRadius: clamp(radius + 18, 30, star.starVariant === "giant" ? 102 : 74),
+          hitRadius: getConstellationHitRadiusForStar(star, radius),
           isActive,
           isVisible
         });
