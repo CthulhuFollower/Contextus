@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Diagrama Orgánico Sobrio</title>
+  <meta name="theme-color" content="#0f1a22" />
+  <title>Contextus</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <script type="importmap">
     {
       "imports": {
@@ -557,6 +560,21 @@
     const LEGACY_MULTI_STORAGE_KEY = "sobrio-tree-state-v2";
     const LEGACY_STORAGE_KEY = "sobrio-tree-state-v1";
     const STORAGE_VERSION = 7;
+    const LOCAL_DB_NAME = "contextus-local-first";
+    const LOCAL_DB_VERSION = 1;
+    const LOCAL_SNAPSHOT_ID = "current";
+    const LOCAL_SCHEMA_VERSION = 1;
+    const LOCAL_TRANSACTION_TYPES = new Set([
+      "createNode",
+      "editNode",
+      "moveNode",
+      "deleteNodeTree",
+      "createMap",
+      "deleteMapAndSelectFallback",
+      "switchMap",
+      "moveConstellationMap",
+      "updateViewFrame"
+    ]);
 
     const canvas = document.getElementById("scene");
     const ctx = canvas.getContext("2d");
@@ -601,6 +619,8 @@
     let draggedNodeId = null;
     let dragOffsetX = 0;
     let dragOffsetY = 0;
+    let dragStartX = 0;
+    let dragStartY = 0;
     let pointerMoved = false;
 
     let panning = false;
@@ -609,6 +629,10 @@
 
     let saveTimeout = null;
     let workspaceLoaded = false;
+    let workspaceLoading = false;
+    let localDbPromise = null;
+    let persistenceChain = Promise.resolve();
+    let localRevision = 0;
     let mapsOverlayOpen = false;
     let constellationItems = [];
     const constellationSummaryCache = new Map();
@@ -626,6 +650,8 @@
     let draggedOverlayMapId = null;
     let overlayMapDragOffsetX = 0;
     let overlayMapDragOffsetY = 0;
+    let overlayMapDragStartX = 0;
+    let overlayMapDragStartY = 0;
     let overlayDraggedMapDriftX = 0;
     let overlayDraggedMapDriftY = 0;
     const adjacentNoteCards = new Map();
@@ -853,6 +879,374 @@
       paletteSignature: ""
     };
 
+    function registerServiceWorker() {
+      if (!("serviceWorker" in navigator)) return;
+
+      window.addEventListener("load", () => {
+        navigator.serviceWorker
+          .register("./service-worker.js")
+          .catch((error) => {
+            console.warn("No se pudo registrar el service worker:", error);
+          });
+      });
+    }
+
+    function toFiniteNumber(value, fallback = 0) {
+      if (value === null || value === undefined || value === "") return fallback;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : fallback;
+    }
+
+    function sanitizePersistedText(value, fallback = "") {
+      if (typeof value !== "string") return fallback;
+      const trimmed = value.trim();
+      return trimmed || fallback;
+    }
+
+    function clonePersistedValue(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function requestToPromise(request) {
+      return new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    function openLocalDb() {
+      if (!("indexedDB" in window)) {
+        return Promise.reject(new Error("IndexedDB no esta disponible."));
+      }
+
+      if (localDbPromise) return localDbPromise;
+
+      localDbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_VERSION);
+
+        request.onupgradeneeded = () => {
+          const db = request.result;
+
+          if (!db.objectStoreNames.contains("snapshots")) {
+            db.createObjectStore("snapshots", { keyPath: "id" });
+          }
+
+          if (!db.objectStoreNames.contains("transactions")) {
+            const transactionsStore = db.createObjectStore("transactions", { keyPath: "id" });
+            transactionsStore.createIndex("status", "status", { unique: false });
+            transactionsStore.createIndex("createdAt", "createdAt", { unique: false });
+          }
+
+          if (!db.objectStoreNames.contains("meta")) {
+            db.createObjectStore("meta", { keyPath: "key" });
+          }
+        };
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => {
+          console.warn("La base local esta bloqueada por otra pestana.");
+        };
+      });
+
+      return localDbPromise;
+    }
+
+    function queuePersistenceTask(task) {
+      const queuedTask = persistenceChain.then(task, task);
+      persistenceChain = queuedTask.catch(() => {});
+      return queuedTask;
+    }
+
+    function nextLocalRevision() {
+      localRevision = Math.max(0, toFiniteNumber(localRevision, 0)) + 1;
+      return localRevision;
+    }
+
+    function createTransactionId() {
+      const randomPart = Math.random().toString(36).slice(2, 10);
+      return `tx_${Date.now()}_${randomPart}`;
+    }
+
+    function createLocalTransactionRecord(type, payload, revision) {
+      if (!LOCAL_TRANSACTION_TYPES.has(type)) {
+        throw new Error(`Tipo de transaccion desconocido: ${type}`);
+      }
+
+      return {
+        id: createTransactionId(),
+        type,
+        createdAt: Date.now(),
+        localRevision: revision,
+        status: "pending",
+        payload: clonePersistedValue(payload || {})
+      };
+    }
+
+    function createLocalSnapshotRecord(state, revision) {
+      return {
+        id: LOCAL_SNAPSHOT_ID,
+        schemaVersion: LOCAL_SCHEMA_VERSION,
+        storageVersion: STORAGE_VERSION,
+        localRevision: revision,
+        savedAt: Date.now(),
+        state: clonePersistedValue(state)
+      };
+    }
+
+    function writeLocalCommit(snapshotRecord, transactionRecord = null, metaRecords = []) {
+      return openLocalDb().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(["snapshots", "transactions", "meta"], "readwrite");
+
+        tx.objectStore("snapshots").put(snapshotRecord);
+        tx.objectStore("meta").put({ key: "localRevision", value: snapshotRecord.localRevision });
+
+        for (const record of metaRecords) {
+          tx.objectStore("meta").put(record);
+        }
+
+        if (transactionRecord) {
+          tx.objectStore("transactions").put(transactionRecord);
+        }
+
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("Transaccion local abortada."));
+      }));
+    }
+
+    function writeLocalMetaRecords(metaRecords) {
+      return openLocalDb().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(["meta"], "readwrite");
+        const store = tx.objectStore("meta");
+
+        for (const record of metaRecords) {
+          store.put(record);
+        }
+
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("Transaccion local abortada."));
+      }));
+    }
+
+    function setLocalMetaValue(key, value) {
+      return queuePersistenceTask(() => writeLocalMetaRecords([{ key, value }]));
+    }
+
+    async function loadLocalSnapshot() {
+      const db = await openLocalDb();
+      const tx = db.transaction(["snapshots"], "readonly");
+      const snapshot = await requestToPromise(tx.objectStore("snapshots").get(LOCAL_SNAPSHOT_ID));
+      return snapshot || null;
+    }
+
+    function captureWorkspaceState(syncActiveMap = true) {
+      if (syncActiveMap) {
+        syncActiveMapInMemory();
+      }
+
+      return clonePersistedValue({
+        version: STORAGE_VERSION,
+        activeMapId,
+        mapIdCounter,
+        mapsView: captureMapsViewState(),
+        maps
+      });
+    }
+
+    function saveLocalSnapshot(state) {
+      const revision = nextLocalRevision();
+      const snapshotRecord = createLocalSnapshotRecord(state, revision);
+      return queuePersistenceTask(() => writeLocalCommit(snapshotRecord));
+    }
+
+    function enqueueLocalTransaction(type, payload = {}, revisionOverride = null) {
+      const revision = Number.isFinite(revisionOverride) ? revisionOverride : nextLocalRevision();
+      const transactionRecord = createLocalTransactionRecord(type, payload, revision);
+
+      return queuePersistenceTask(() => openLocalDb().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(["transactions", "meta"], "readwrite");
+        tx.objectStore("transactions").put(transactionRecord);
+        tx.objectStore("meta").put({ key: "localRevision", value: revision });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("Transaccion local abortada."));
+      })));
+    }
+
+    function commitLocalTransaction(type, payload = {}, options = {}) {
+      try {
+        const syncActiveMap = options.syncActiveMap !== false;
+        const revision = nextLocalRevision();
+        const state = captureWorkspaceState(syncActiveMap);
+        const snapshotRecord = createLocalSnapshotRecord(state, revision);
+        const transactionRecord = createLocalTransactionRecord(type, payload, revision);
+
+        return queuePersistenceTask(() => writeLocalCommit(snapshotRecord, transactionRecord))
+          .catch((error) => {
+            console.error("No se pudo confirmar la transaccion local:", error);
+          });
+      } catch (error) {
+        console.error("No se pudo preparar la transaccion local:", error);
+        return Promise.resolve();
+      }
+    }
+
+    function createViewFramePayload(reason = "view") {
+      return {
+        reason,
+        activeMapId,
+        selectedNodeId,
+        camera: {
+          x: camera.x,
+          y: camera.y,
+          targetX: camera.targetX,
+          targetY: camera.targetY,
+          zoom: camera.zoom,
+          targetZoom: camera.targetZoom
+        },
+        mapsView: captureMapsViewState()
+      };
+    }
+
+    function serializeNodeForTransaction(node) {
+      if (!node) return null;
+      return {
+        id: node.id,
+        parentId: node.parentId,
+        level: node.level,
+        isCenter: Boolean(node.isCenter),
+        label: node.label,
+        note: node.note,
+        x: node.x,
+        y: node.y
+      };
+    }
+
+    function restorePersistedState(state, shouldResave = false) {
+      if (!state || !Array.isArray(state.maps)) return false;
+
+      const restoredMaps = state.maps.map((map, index) =>
+        sanitizeStoredMap(map, Number.isFinite(Number(map && map.id)) ? Number(map.id) : index + 1)
+      );
+
+      if (!restoredMaps.length) return false;
+
+      const needsResave =
+        shouldResave ||
+        state.version !== STORAGE_VERSION ||
+        !Number.isFinite(Number(state.mapIdCounter)) ||
+        !Number.isFinite(Number(state.activeMapId)) ||
+        state.maps.some(map => !Number.isFinite(Number(map && map.id))) ||
+        state.maps.some(map => !readStoredStarIdentity(map)) ||
+        !sanitizeMapsViewState(state.mapsView);
+
+      return restoreWorkspace(
+        restoredMaps,
+        Number(state.activeMapId),
+        toFiniteNumber(state.mapIdCounter, 0),
+        sanitizeMapsViewState(state.mapsView),
+        needsResave
+      );
+    }
+
+    function loadLocalStorageState() {
+      try {
+        const currentRaw = localStorage.getItem(STORAGE_KEY);
+        if (currentRaw) {
+          const state = JSON.parse(currentRaw);
+          if (restorePersistedState(state, false)) return true;
+        }
+
+        const legacyMultiRaw = localStorage.getItem(LEGACY_MULTI_STORAGE_KEY);
+        if (legacyMultiRaw) {
+          const state = JSON.parse(legacyMultiRaw);
+          if (state && Array.isArray(state.maps)) {
+            const restoredMaps = state.maps.map((map, index) =>
+              sanitizeStoredMap(map, index + 1)
+            );
+
+            if (restoredMaps.length) {
+              const activeIndex = Math.floor(clamp(toFiniteNumber(state.activeMapIndex, 0), 0, restoredMaps.length - 1));
+              return restoreWorkspace(
+                restoredMaps,
+                restoredMaps[activeIndex].id,
+                restoredMaps.length,
+                null,
+                true
+              );
+            }
+          }
+        }
+
+        const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+        if (!legacyRaw) return false;
+
+        const legacyState = JSON.parse(legacyRaw);
+        if (!legacyState || !Array.isArray(legacyState.nodes) || !Array.isArray(legacyState.links)) {
+          return false;
+        }
+
+        const restoredMap = sanitizeStoredMap(legacyState, 1);
+        return restoreWorkspace([restoredMap], restoredMap.id, 1, null, true);
+      } catch (error) {
+        console.error("No se pudo cargar el estado heredado:", error);
+        return false;
+      }
+    }
+
+    async function migrateLocalStorageStateIfNeeded() {
+      const restored = loadLocalStorageState();
+      const migratedAt = Date.now();
+
+      try {
+        await setLocalMetaValue("localStorageMigratedAt", migratedAt);
+      } catch (error) {
+        console.error("No se pudo marcar la migracion local:", error);
+      }
+
+      if (!restored) return false;
+
+      await saveState(false);
+      return true;
+    }
+
+    async function loadState() {
+      try {
+        const snapshotRecord = await loadLocalSnapshot();
+        if (snapshotRecord && snapshotRecord.state) {
+          localRevision = toFiniteNumber(snapshotRecord.localRevision, 0);
+          if (restorePersistedState(snapshotRecord.state, false)) {
+            return true;
+          }
+        }
+
+        return await migrateLocalStorageStateIfNeeded();
+      } catch (error) {
+        console.error("No se pudo cargar el estado local:", error);
+        return loadLocalStorageState();
+      }
+    }
+
+    async function initializeWorkspace() {
+      try {
+        const restored = await loadState();
+        if (!restored) {
+          const freshMap = createDefaultMapState();
+          maps = [freshMap];
+          activeMapId = freshMap.id;
+          applyMapState(freshMap);
+          applyMapsViewState(null);
+          updateMapsButton();
+          await saveState(false);
+        }
+      } finally {
+        workspaceLoaded = true;
+        workspaceLoading = false;
+      }
+    }
+
     function resize() {
       width = window.innerWidth;
       height = window.innerHeight;
@@ -870,18 +1264,13 @@
       mapsCanvas.style.height = height + "px";
       mapsCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      if (!workspaceLoaded) {
-        workspaceLoaded = true;
-        const restored = loadState();
-        if (!restored) {
-          const freshMap = createDefaultMapState();
-          maps = [freshMap];
-          activeMapId = freshMap.id;
-          applyMapState(freshMap);
-          applyMapsViewState(null);
-          updateMapsButton();
-          saveState(false);
-        }
+      if (!workspaceLoaded && !workspaceLoading) {
+        workspaceLoading = true;
+        initializeWorkspace().catch((error) => {
+          console.error("No se pudo iniciar el espacio de trabajo:", error);
+          workspaceLoaded = true;
+          workspaceLoading = false;
+        });
       }
     }
 
@@ -1221,7 +1610,7 @@
     function sanitizeStoredMap(rawMap, fallbackId) {
       const rawNodes = Array.isArray(rawMap && rawMap.nodes) ? rawMap.nodes : [];
       const rawLinks = Array.isArray(rawMap && rawMap.links) ? rawMap.links : [];
-      const mapId = Number.isFinite(rawMap && rawMap.id) ? rawMap.id : fallbackId;
+      const mapId = toFiniteNumber(rawMap && rawMap.id, fallbackId);
 
       const validNodeIds = new Set();
       const sanitizedNodes = [];
@@ -1230,19 +1619,23 @@
       for (const rawNode of rawNodes) {
         if (!rawNode) continue;
 
-        const nodeId = Number.isFinite(rawNode.id) ? rawNode.id : maxNodeId + 1;
+        const nodeId = toFiniteNumber(rawNode.id, maxNodeId + 1);
+        const parentId = rawNode.parentId === null || rawNode.parentId === undefined
+          ? null
+          : toFiniteNumber(rawNode.parentId, null);
+        const isCenter = Boolean(rawNode.isCenter);
         maxNodeId = Math.max(maxNodeId, nodeId);
         validNodeIds.add(nodeId);
 
         sanitizedNodes.push({
           id: nodeId,
-          parentId: rawNode.parentId ?? null,
-          level: rawNode.level ?? 0,
-          isCenter: Boolean(rawNode.isCenter),
-          label: rawNode.label || (rawNode.isCenter ? "Centro" : "Nodo"),
+          parentId,
+          level: toFiniteNumber(rawNode.level, 0),
+          isCenter,
+          label: sanitizePersistedText(rawNode.label, isCenter ? "Centro" : "Nodo"),
           note: typeof rawNode.note === "string" ? rawNode.note : "",
-          x: rawNode.x ?? 0,
-          y: rawNode.y ?? 0
+          x: toFiniteNumber(rawNode.x, 0),
+          y: toFiniteNumber(rawNode.y, 0)
         });
       }
 
@@ -1256,10 +1649,13 @@
       for (const rawLink of rawLinks) {
         if (!rawLink) continue;
 
-        if (validNodeIds.has(rawLink.from) && validNodeIds.has(rawLink.to)) {
+        const from = toFiniteNumber(rawLink.from, NaN);
+        const to = toFiniteNumber(rawLink.to, NaN);
+
+        if (validNodeIds.has(from) && validNodeIds.has(to)) {
           sanitizedLinks.push({
-            from: rawLink.from,
-            to: rawLink.to
+            from,
+            to
           });
         }
       }
@@ -1276,16 +1672,16 @@
         starVariant: starIdentity.starVariant,
         starScale: starIdentity.starScale,
         starLuminosity: starIdentity.starLuminosity,
-        nodeIdCounter: Math.max(rawMap && rawMap.nodeIdCounter ? rawMap.nodeIdCounter : 0, maxNodeId),
-        selectedNodeId: validNodeIds.has(rawMap && rawMap.selectedNodeId)
-          ? rawMap.selectedNodeId
+        nodeIdCounter: Math.max(toFiniteNumber(rawMap && rawMap.nodeIdCounter, 0), maxNodeId),
+        selectedNodeId: validNodeIds.has(toFiniteNumber(rawMap && rawMap.selectedNodeId, NaN))
+          ? toFiniteNumber(rawMap.selectedNodeId, sanitizedNodes[0].id)
           : sanitizedNodes[0].id,
         constellationPosition: sanitizeConstellationPosition(rawMap && rawMap.constellationPosition),
         camera: {
-          x: rawMap && rawMap.camera ? rawMap.camera.x ?? width / 2 : width / 2,
-          y: rawMap && rawMap.camera ? rawMap.camera.y ?? height / 2 : height / 2,
-          targetX: rawMap && rawMap.camera ? rawMap.camera.targetX ?? (rawMap.camera.x ?? width / 2) : width / 2,
-          targetY: rawMap && rawMap.camera ? rawMap.camera.targetY ?? (rawMap.camera.y ?? height / 2) : height / 2,
+          x: rawMap && rawMap.camera ? toFiniteNumber(rawMap.camera.x, width / 2) : width / 2,
+          y: rawMap && rawMap.camera ? toFiniteNumber(rawMap.camera.y, height / 2) : height / 2,
+          targetX: rawMap && rawMap.camera ? toFiniteNumber(rawMap.camera.targetX, toFiniteNumber(rawMap.camera.x, width / 2)) : width / 2,
+          targetY: rawMap && rawMap.camera ? toFiniteNumber(rawMap.camera.targetY, toFiniteNumber(rawMap.camera.y, height / 2)) : height / 2,
           zoom: rawMap && rawMap.camera ? clamp(Number(rawMap.camera.zoom) || 1, D0_ZOOM_MIN, D0_ZOOM_MAX) : 1,
           targetZoom: rawMap && rawMap.camera
             ? clamp(Number(rawMap.camera.targetZoom) || Number(rawMap.camera.zoom) || 1, D0_ZOOM_MIN, D0_ZOOM_MAX)
@@ -1356,15 +1752,15 @@
     function sanitizeMapsViewState(rawView) {
       if (!rawView) return null;
 
-      const x = Number(rawView.x);
-      const y = Number(rawView.y);
-      const zoom = clamp(Number(rawView.zoom), MAPS_ZOOM_MIN, MAPS_ZOOM_MAX);
+      const x = toFiniteNumber(rawView.x, NaN);
+      const y = toFiniteNumber(rawView.y, NaN);
+      const zoom = clamp(toFiniteNumber(rawView.zoom, NaN), MAPS_ZOOM_MIN, MAPS_ZOOM_MAX);
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoom)) return null;
 
-      const targetX = Number.isFinite(rawView.targetX) ? rawView.targetX : x;
-      const targetY = Number.isFinite(rawView.targetY) ? rawView.targetY : y;
-      const targetZoom = Number.isFinite(rawView.targetZoom)
-        ? clamp(rawView.targetZoom, MAPS_ZOOM_MIN, MAPS_ZOOM_MAX)
+      const targetX = toFiniteNumber(rawView.targetX, x);
+      const targetY = toFiniteNumber(rawView.targetY, y);
+      const targetZoom = Number.isFinite(toFiniteNumber(rawView.targetZoom, NaN))
+        ? clamp(toFiniteNumber(rawView.targetZoom, zoom), MAPS_ZOOM_MIN, MAPS_ZOOM_MAX)
         : zoom;
 
       return {
@@ -1404,30 +1800,30 @@
       hideNoteCard();
 
       const nextCamera = state.camera || {};
-      camera.x = nextCamera.x ?? width / 2;
-      camera.y = nextCamera.y ?? height / 2;
-      camera.targetX = nextCamera.targetX ?? camera.x;
-      camera.targetY = nextCamera.targetY ?? camera.y;
-      camera.zoom = clamp(Number(nextCamera.zoom) || 1, D0_ZOOM_MIN, D0_ZOOM_MAX);
-      camera.targetZoom = clamp(Number(nextCamera.targetZoom) || camera.zoom, D0_ZOOM_MIN, D0_ZOOM_MAX);
+      camera.x = toFiniteNumber(nextCamera.x, width / 2);
+      camera.y = toFiniteNumber(nextCamera.y, height / 2);
+      camera.targetX = toFiniteNumber(nextCamera.targetX, camera.x);
+      camera.targetY = toFiniteNumber(nextCamera.targetY, camera.y);
+      camera.zoom = clamp(toFiniteNumber(nextCamera.zoom, 1), D0_ZOOM_MIN, D0_ZOOM_MAX);
+      camera.targetZoom = clamp(toFiniteNumber(nextCamera.targetZoom, camera.zoom), D0_ZOOM_MIN, D0_ZOOM_MAX);
 
       for (const savedNode of state.nodes || []) {
         nodes.push({
           id: savedNode.id,
           parentId: savedNode.parentId ?? null,
-          level: savedNode.level ?? 0,
+          level: toFiniteNumber(savedNode.level, 0),
           isCenter: Boolean(savedNode.isCenter),
-          label: savedNode.label || (savedNode.isCenter ? "Centro" : "Nodo"),
+          label: sanitizePersistedText(savedNode.label, savedNode.isCenter ? "Centro" : "Nodo"),
           note: typeof savedNode.note === "string" ? savedNode.note : "",
 
-          x: savedNode.x ?? 0,
-          y: savedNode.y ?? 0,
+          x: toFiniteNumber(savedNode.x, 0),
+          y: toFiniteNumber(savedNode.y, 0),
 
           vx: 0,
           vy: 0,
 
-          renderX: savedNode.x ?? 0,
-          renderY: savedNode.y ?? 0,
+          renderX: toFiniteNumber(savedNode.x, 0),
+          renderY: toFiniteNumber(savedNode.y, 0),
 
           baseRadius: savedNode.isCenter ? 20 : 14,
           visualRadius: savedNode.isCenter ? 20 : 14,
@@ -1552,7 +1948,12 @@
         }
       }
 
-      saveState(false);
+      commitLocalTransaction("deleteMapAndSelectFallback", {
+        deletedMapId: mapId,
+        nextActiveMapId: activeMapId,
+        nextOverlaySelectedMapId: overlaySelectedMapId,
+        mapsView: captureMapsViewState()
+      }, { syncActiveMap: false });
       updateMapsButton();
       return true;
     }
@@ -1590,7 +1991,7 @@
       mapsCtx.clearRect(0, 0, width, height);
       app.style.cursor = "grab";
       updateMapsButton();
-      saveState(false);
+      commitLocalTransaction("updateViewFrame", createViewFramePayload("closeMapsOverlay"), { syncActiveMap: false });
     }
 
     function openMapsOverlay() {
@@ -1648,8 +2049,13 @@
       flushPendingSave();
       syncActiveMapInMemory();
 
+      const previousMapId = activeMapId;
       applyMapState(nextMap);
-      saveState(false);
+      commitLocalTransaction("switchMap", {
+        previousMapId,
+        activeMapId,
+        mapsView: captureMapsViewState()
+      }, { syncActiveMap: false });
       closeMapsOverlay();
     }
 
@@ -1708,7 +2114,11 @@
       overlaySelectedMapId = freshMap.id;
       hoveredMapId = freshMap.id;
       cancelOverlayCreateMode();
-      saveState(false);
+      commitLocalTransaction("createMap", {
+        mapId: freshMap.id,
+        map: clonePersistedValue(freshMap),
+        mapsView: captureMapsViewState()
+      }, { syncActiveMap: false });
       updateMapsButton();
       updateMapsCenterButton();
       return true;
@@ -1828,7 +2238,11 @@
 
       selectedNodeId = child.id;
       triggerExpand(child);
-      scheduleSave();
+      commitLocalTransaction("createNode", {
+        mapId: activeMapId,
+        parentId: parent.id,
+        node: serializeNodeForTransaction(child)
+      }, { syncActiveMap: true });
     }
 
     function removeSelectedNode() {
@@ -1837,6 +2251,12 @@
 
       const descendants = getDescendants(node.id);
       const idsToDelete = new Set([node.id, ...descendants]);
+      const deletedNodes = nodes
+        .filter(existingNode => idsToDelete.has(existingNode.id))
+        .map(serializeNodeForTransaction);
+      const deletedLinks = links
+        .filter(link => idsToDelete.has(link.from) || idsToDelete.has(link.to))
+        .map(link => ({ from: link.from, to: link.to }));
 
       for (let i = nodes.length - 1; i >= 0; i--) {
         if (idsToDelete.has(nodes[i].id)) nodes.splice(i, 1);
@@ -1852,7 +2272,14 @@
 
       const fallback = node.parentId ? getNodeById(node.parentId) : nodes[0];
       selectedNodeId = fallback ? fallback.id : null;
-      scheduleSave();
+      commitLocalTransaction("deleteNodeTree", {
+        mapId: activeMapId,
+        rootNodeId: node.id,
+        deletedNodeIds: [...idsToDelete],
+        deletedNodes,
+        deletedLinks,
+        selectedNodeId
+      }, { syncActiveMap: true });
     }
 
     function triggerExpand(node) {
@@ -4434,6 +4861,8 @@
         if (node && save) {
           const nextLabel = nodeInput.value.trim();
           const nextNote = nodeNoteInput.value.trim();
+          const previousLabel = node.label;
+          const previousNote = node.note || "";
           let changed = false;
 
           const resolvedLabel = nextLabel || getDefaultNodeLabel(node);
@@ -4448,7 +4877,14 @@
           }
 
           if (changed) {
-            scheduleSave();
+            commitLocalTransaction("editNode", {
+              mapId: activeMapId,
+              nodeId: node.id,
+              previousLabel,
+              previousNote,
+              label: node.label,
+              note: node.note || ""
+            }, { syncActiveMap: true });
           }
         }
       }
@@ -4478,96 +4914,21 @@
 
     function saveState(syncActiveMap = true) {
       try {
-        if (syncActiveMap) {
-          syncActiveMapInMemory();
-        }
-
-        const state = {
-          version: STORAGE_VERSION,
-          activeMapId,
-          mapIdCounter,
-          mapsView: captureMapsViewState(),
-          maps
-        };
-
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        const state = captureWorkspaceState(syncActiveMap);
+        return saveLocalSnapshot(state).catch((error) => {
+          console.error("No se pudo guardar el estado local:", error);
+        });
       } catch (error) {
-        console.error("No se pudo guardar el estado:", error);
+        console.error("No se pudo preparar el estado local:", error);
+        return Promise.resolve();
       }
     }
 
-    function loadState() {
-      try {
-        const currentRaw = localStorage.getItem(STORAGE_KEY);
-        if (currentRaw) {
-          const state = JSON.parse(currentRaw);
-          if (state && Array.isArray(state.maps)) {
-            const restoredMaps = state.maps.map((map, index) =>
-              sanitizeStoredMap(map, Number.isFinite(map && map.id) ? map.id : index + 1)
-            );
-
-            if (restoredMaps.length) {
-              const needsResave =
-                state.version !== STORAGE_VERSION ||
-                !Number.isFinite(state.mapIdCounter) ||
-                !Number.isFinite(state.activeMapId) ||
-                state.maps.some(map => !Number.isFinite(map && map.id)) ||
-                state.maps.some(map => !readStoredStarIdentity(map)) ||
-                !sanitizeMapsViewState(state.mapsView);
-
-              return restoreWorkspace(
-                restoredMaps,
-                state.activeMapId,
-                state.mapIdCounter ?? 0,
-                sanitizeMapsViewState(state.mapsView),
-                needsResave
-              );
-            }
-          }
-        }
-
-        const legacyMultiRaw = localStorage.getItem(LEGACY_MULTI_STORAGE_KEY);
-        if (legacyMultiRaw) {
-          const state = JSON.parse(legacyMultiRaw);
-          if (state && Array.isArray(state.maps)) {
-            const restoredMaps = state.maps.map((map, index) =>
-              sanitizeStoredMap(map, index + 1)
-            );
-
-            if (restoredMaps.length) {
-              const activeIndex = clamp(state.activeMapIndex ?? 0, 0, restoredMaps.length - 1);
-              return restoreWorkspace(
-                restoredMaps,
-                restoredMaps[activeIndex].id,
-                restoredMaps.length,
-                null,
-                true
-              );
-            }
-          }
-        }
-
-        const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
-        if (!legacyRaw) return false;
-
-        const legacyState = JSON.parse(legacyRaw);
-        if (!legacyState || !Array.isArray(legacyState.nodes) || !Array.isArray(legacyState.links)) {
-          return false;
-        }
-
-        const restoredMap = sanitizeStoredMap(legacyState, 1);
-        return restoreWorkspace([restoredMap], restoredMap.id, 1, null, true);
-      } catch (error) {
-        console.error("No se pudo cargar el estado:", error);
-        return false;
-      }
-    }
-
-    function scheduleSave() {
+    function scheduleSave(reason = "view") {
       flushPendingSave();
       saveTimeout = setTimeout(() => {
         saveTimeout = null;
-        saveState(true);
+        commitLocalTransaction("updateViewFrame", createViewFramePayload(reason), { syncActiveMap: true });
       }, 140);
     }
 
@@ -4590,7 +4951,7 @@
       camera.targetZoom = nextZoom;
       camera.targetX = x - worldBefore.x * nextZoom;
       camera.targetY = y - worldBefore.y * nextZoom;
-      scheduleSave();
+      scheduleSave("mainCanvasWheel");
     }, { passive: false });
 
     canvas.addEventListener("mousedown", (e) => {
@@ -4607,6 +4968,8 @@
         const world = screenToWorld(x, y);
         dragOffsetX = world.x - node.x;
         dragOffsetY = world.y - node.y;
+        dragStartX = node.x;
+        dragStartY = node.y;
       } else {
         panning = true;
         panLastX = x;
@@ -4671,11 +5034,23 @@
         selectedNodeId = null;
       }
 
-      if (draggedNodeId || pointerMoved || clickedEmpty) {
-        scheduleSave();
+      if (draggedNodeId && pointerMoved) {
+        const movedNode = getNodeById(draggedNodeId);
+        if (movedNode) {
+          commitLocalTransaction("moveNode", {
+            mapId: activeMapId,
+            nodeId: movedNode.id,
+            from: { x: dragStartX, y: dragStartY },
+            to: { x: movedNode.x, y: movedNode.y }
+          }, { syncActiveMap: true });
+        }
+      } else if (draggedNodeId || pointerMoved || clickedEmpty) {
+        commitLocalTransaction("updateViewFrame", createViewFramePayload("mainCanvasMouseup"), { syncActiveMap: true });
       }
 
       draggedNodeId = null;
+      dragStartX = 0;
+      dragStartY = 0;
       panning = false;
       app.style.cursor = "grab";
     });
@@ -4683,10 +5058,22 @@
     canvas.addEventListener("mouseleave", () => {
       if (mapsOverlayOpen) return;
 
-      if (draggedNodeId || panning) {
-        scheduleSave();
+      if (draggedNodeId && pointerMoved) {
+        const movedNode = getNodeById(draggedNodeId);
+        if (movedNode) {
+          commitLocalTransaction("moveNode", {
+            mapId: activeMapId,
+            nodeId: movedNode.id,
+            from: { x: dragStartX, y: dragStartY },
+            to: { x: movedNode.x, y: movedNode.y }
+          }, { syncActiveMap: true });
+        }
+      } else if (draggedNodeId || panning) {
+        commitLocalTransaction("updateViewFrame", createViewFramePayload("mainCanvasMouseleave"), { syncActiveMap: true });
       }
       draggedNodeId = null;
+      dragStartX = 0;
+      dragStartY = 0;
       panning = false;
       app.style.cursor = "default";
     });
@@ -4762,6 +5149,7 @@
       mapsCamera.targetZoom = nextZoom;
       mapsCamera.targetX = worldBefore.x - (x - width * 0.5) / nextZoom;
       mapsCamera.targetY = worldBefore.y - (y - height * 0.5) / nextZoom;
+      scheduleSave("mapsOverlayWheel");
     }, { passive: false });
 
     mapsOverlay.addEventListener("mousedown", (e) => {
@@ -4783,6 +5171,8 @@
           draggedOverlayMapId = target.item.mapId;
           overlayMapDragOffsetX = world.x - (target.item.worldX + target.item.driftX);
           overlayMapDragOffsetY = world.y - (target.item.worldY + target.item.driftY);
+          overlayMapDragStartX = target.item.worldX;
+          overlayMapDragStartY = target.item.worldY;
           overlayDraggedMapDriftX = target.item.driftX;
           overlayDraggedMapDriftY = target.item.driftY;
           overlayPointerMoved = false;
@@ -4801,12 +5191,16 @@
     mapsOverlay.addEventListener("mouseup", () => {
       const moved = overlayPointerMoved;
       const draggedMap = draggedOverlayMapId !== null;
+      const draggedMapId = draggedOverlayMapId;
+      const draggedMapStart = { x: overlayMapDragStartX, y: overlayMapDragStartY };
       if (!overlayPanning && !draggedMap) return;
 
       overlayPanning = false;
       draggedOverlayMapId = null;
       overlayMapDragOffsetX = 0;
       overlayMapDragOffsetY = 0;
+      overlayMapDragStartX = 0;
+      overlayMapDragStartY = 0;
       overlayDraggedMapDriftX = 0;
       overlayDraggedMapDriftY = 0;
       overlaySuppressClick = moved;
@@ -4814,12 +5208,21 @@
       mapsOverlay.style.cursor = "default";
 
       if (draggedMap && moved) {
-        saveState(false);
+        const map = getMapById(draggedMapId);
+        commitLocalTransaction("moveConstellationMap", {
+          mapId: draggedMapId,
+          from: draggedMapStart,
+          to: cloneConstellationPosition(map && map.constellationPosition)
+        }, { syncActiveMap: false });
+      } else if (moved) {
+        commitLocalTransaction("updateViewFrame", createViewFramePayload("mapsOverlayMouseup"), { syncActiveMap: false });
       }
     });
 
     mapsOverlay.addEventListener("mouseleave", () => {
       const draggedMap = draggedOverlayMapId !== null;
+      const draggedMapId = draggedOverlayMapId;
+      const draggedMapStart = { x: overlayMapDragStartX, y: overlayMapDragStartY };
       const moved = overlayPointerMoved;
       overlayPointer.inside = false;
       hoveredMapId = null;
@@ -4827,6 +5230,8 @@
       draggedOverlayMapId = null;
       overlayMapDragOffsetX = 0;
       overlayMapDragOffsetY = 0;
+      overlayMapDragStartX = 0;
+      overlayMapDragStartY = 0;
       overlayDraggedMapDriftX = 0;
       overlayDraggedMapDriftY = 0;
       overlayPointerMoved = false;
@@ -4834,7 +5239,14 @@
       mapsOverlay.style.cursor = "default";
 
       if (draggedMap && moved) {
-        saveState(false);
+        const map = getMapById(draggedMapId);
+        commitLocalTransaction("moveConstellationMap", {
+          mapId: draggedMapId,
+          from: draggedMapStart,
+          to: cloneConstellationPosition(map && map.constellationPosition)
+        }, { syncActiveMap: false });
+      } else if (moved) {
+        commitLocalTransaction("updateViewFrame", createViewFramePayload("mapsOverlayMouseleave"), { syncActiveMap: false });
       }
     });
 
@@ -4851,6 +5263,7 @@
       overlayDraggedMapDriftY = 0;
       centerMapsCameraOnActive(false);
       updateMapsCenterButton();
+      commitLocalTransaction("updateViewFrame", createViewFramePayload("centerMapsCamera"), { syncActiveMap: false });
     });
 
     centerMapsBtn.addEventListener("mousedown", (e) => {
@@ -5050,6 +5463,7 @@
 
     window.addEventListener("resize", resize);
 
+    registerServiceWorker();
     resize();
     requestAnimationFrame(render);
   </script>
