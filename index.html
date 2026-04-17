@@ -1780,6 +1780,20 @@
       return true;
     }
 
+    function freezeMapConstellationPosition(map) {
+      if (!map || cloneConstellationPosition(map.constellationPosition)) return;
+
+      const orderedMaps = getOrderedMaps();
+      const mapIndex = orderedMaps.findIndex(candidate => candidate.id === map.id);
+      if (mapIndex < 0) return;
+
+      const point = getConstellationMapWorldPoint(map, mapIndex, orderedMaps.length);
+      map.constellationPosition = {
+        x: point.x,
+        y: point.y
+      };
+    }
+
     function applyMapState(state) {
       nodes.length = 0;
       links.length = 0;
@@ -1927,6 +1941,10 @@
       flushPendingSave();
       syncActiveMapInMemory();
 
+      const willLeaveSingleMapUniverse = maps.length === 2;
+      if (willLeaveSingleMapUniverse) {
+        freezeMapConstellationPosition(maps.find(existingMap => existingMap.id !== mapId));
+      }
       const nextActiveId = mapId === activeMapId
         ? getNextMapIdAfterDelete(mapId)
         : activeMapId;
@@ -1944,8 +1962,14 @@
         const nextMap = getMapById(nextActiveId);
         if (nextMap) {
           applyMapState(nextMap);
-          centerMapsCameraOnActive(false);
+          if (willLeaveSingleMapUniverse) {
+            holdMapsCameraAtCurrentView();
+          } else {
+            centerMapsCameraOnActive(false);
+          }
         }
+      } else if (willLeaveSingleMapUniverse) {
+        holdMapsCameraAtCurrentView();
       }
 
       commitLocalTransaction("deleteMapAndSelectFallback", {
@@ -2099,6 +2123,10 @@
       flushPendingSave();
       syncActiveMapInMemory();
 
+      const wasSingleMapUniverse = maps.length === 1;
+      if (wasSingleMapUniverse) {
+        freezeMapConstellationPosition(maps[0]);
+      }
       const resolvedStarIdentity = starIdentity
         ? { ...starIdentity }
         : overlayCreateState && overlayCreateState.starIdentity
@@ -2114,6 +2142,9 @@
       overlaySelectedMapId = freshMap.id;
       hoveredMapId = freshMap.id;
       cancelOverlayCreateMode();
+      if (wasSingleMapUniverse) {
+        holdMapsCameraAtCurrentView();
+      }
       commitLocalTransaction("createMap", {
         mapId: freshMap.id,
         map: clonePersistedValue(freshMap),
@@ -3966,6 +3997,23 @@
     function settleMapsCamera() {
       const settledView = captureMapsViewState();
       applyMapsViewState(settledView);
+    }
+
+    function holdMapsCameraAtCurrentView() {
+      const x = Number.isFinite(mapsCamera.x) ? mapsCamera.x : 0;
+      const y = Number.isFinite(mapsCamera.y) ? mapsCamera.y : 0;
+      const zoom = clamp(
+        Number.isFinite(mapsCamera.zoom) ? mapsCamera.zoom : 1,
+        MAPS_ZOOM_MIN,
+        MAPS_ZOOM_MAX
+      );
+
+      mapsCamera.x = x;
+      mapsCamera.y = y;
+      mapsCamera.targetX = x;
+      mapsCamera.targetY = y;
+      mapsCamera.zoom = zoom;
+      mapsCamera.targetZoom = zoom;
     }
 
     function projectConstellationPoint(worldX, worldY) {
