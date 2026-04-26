@@ -683,7 +683,7 @@
     const MAPS_ZOOM_MIN = 0.08;
     const MAPS_ZOOM_MAX = 18;
     const D0_ZOOM_MIN = 0.36;
-    const D0_ZOOM_MAX = 3.6;
+    const D0_ZOOM_MAX = 10;
     const MAPS_ENTER_DURATION = 1280;
     const UNIVERSE_BACKDROP_TILE_SIZE = 960;
     const UNIVERSE_BACKDROP_REFERENCE_AREA = 2100 * 1260;
@@ -855,13 +855,14 @@
     const centerStarSurfaceCache = {
       canvas: null,
       ctx: null,
-      size: 72,
+      size: 256,
       lastUpdateTime: -Infinity,
       signature: "",
       seed: 0,
       imageData: null
     };
-    const CENTER_STAR_WEBGL_RENDER_SIZE = 384;
+    const CENTER_STAR_WEBGL_RENDER_SIZE = 1024;
+    const CENTER_STAR_WEBGL_PIXEL_RATIO_MAX = 2;
     const CENTER_STAR_WEBGL_RADIUS = 1.15;
     const CENTER_STAR_WEBGL_CAMERA_FOV = 42;
     const CENTER_STAR_WEBGL_CAMERA_DISTANCE = 8.7;
@@ -876,7 +877,8 @@
       camera: null,
       estrella: null,
       glowTexture: null,
-      paletteSignature: ""
+      paletteSignature: "",
+      pixelRatio: 1
     };
 
     function registerServiceWorker() {
@@ -1257,12 +1259,16 @@
       canvas.style.width = width + "px";
       canvas.style.height = height + "px";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
 
       mapsCanvas.width = width * dpr;
       mapsCanvas.height = height * dpr;
       mapsCanvas.style.width = width + "px";
       mapsCanvas.style.height = height + "px";
       mapsCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      mapsCtx.imageSmoothingEnabled = true;
+      mapsCtx.imageSmoothingQuality = "high";
 
       if (!workspaceLoaded && !workspaceLoading) {
         workspaceLoading = true;
@@ -3424,11 +3430,20 @@
 
     function createCenterStarNeutralGlowTexture(THREE) {
       const canvas = document.createElement("canvas");
-      canvas.width = 256;
-      canvas.height = 256;
+      const textureSize = 512;
+      const textureCenter = textureSize * 0.5;
+      canvas.width = textureSize;
+      canvas.height = textureSize;
 
       const textureCtx = canvas.getContext("2d");
-      const gradient = textureCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      const gradient = textureCtx.createRadialGradient(
+        textureCenter,
+        textureCenter,
+        0,
+        textureCenter,
+        textureCenter,
+        textureCenter
+      );
       gradient.addColorStop(0, "rgba(255, 255, 255, 1)");
       gradient.addColorStop(0.2, "rgba(255, 255, 255, 0.9)");
       gradient.addColorStop(0.46, "rgba(255, 255, 255, 0.42)");
@@ -3441,6 +3456,22 @@
       const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
       return texture;
+    }
+
+    function getCenterStarWebGLPixelRatio() {
+      return clamp(dpr || window.devicePixelRatio || 1, 1, CENTER_STAR_WEBGL_PIXEL_RATIO_MAX);
+    }
+
+    function syncCenterStarWebGLRendererScale() {
+      const renderer = centerStarWebGL.renderer;
+      if (!renderer) return;
+
+      const pixelRatio = getCenterStarWebGLPixelRatio();
+      if (centerStarWebGL.pixelRatio === pixelRatio) return;
+
+      renderer.setPixelRatio(pixelRatio);
+      renderer.setSize(CENTER_STAR_WEBGL_RENDER_SIZE, CENTER_STAR_WEBGL_RENDER_SIZE, false);
+      centerStarWebGL.pixelRatio = pixelRatio;
     }
 
     function ensureCenterStarNeutralGlowTexture(THREE, estrella) {
@@ -3474,7 +3505,8 @@
             premultipliedAlpha: false,
             preserveDrawingBuffer: true
           });
-          renderer.setPixelRatio(1);
+          const pixelRatio = getCenterStarWebGLPixelRatio();
+          renderer.setPixelRatio(pixelRatio);
           renderer.setSize(CENTER_STAR_WEBGL_RENDER_SIZE, CENTER_STAR_WEBGL_RENDER_SIZE, false);
           renderer.setClearColor(0x000000, 0);
           renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -3499,6 +3531,7 @@
           centerStarWebGL.camera = camera3d;
           centerStarWebGL.estrella = estrella;
           centerStarWebGL.paletteSignature = "";
+          centerStarWebGL.pixelRatio = pixelRatio;
 
           await estrella.ready;
           ensureCenterStarNeutralGlowTexture(THREE, estrella);
@@ -3516,6 +3549,7 @@
       const isBlue = star && star.starType === "blue";
       const isWhite = star && star.starType === "white";
       const isGiant = star && star.starVariant === "giant";
+      const externalGlow = getCenterStarExternalGlowProfile(star);
       const coreScale = clamp(starScale, 0.84, isGiant ? 1.68 : 1.5);
       const luminosityLift = starLuminosity - 1;
       const glowScale = clamp(
@@ -3523,11 +3557,12 @@
           luminosityLift * 2.05 +
           (coreScale - 1) * 0.68 +
           (isGiant ? 0.24 : 0) +
-          (isBlue || isWhite ? 0.1 : 0),
+          (isBlue || isWhite ? 0.1 : 0) +
+          externalGlow.scaleBoost,
         4.15,
-        5.55
+        5.72
       );
-      const glowAlphaScale = clamp(0.9 + luminosityLift * 0.78, 0.78, 1.28);
+      const glowAlphaScale = clamp(0.9 + luminosityLift * 0.78 + externalGlow.alphaBoost, 0.82, 1.44);
       const rotationSpeed = 0.016 * clamp(star && star.orbitSpeed ? star.orbitSpeed : 1, 0.66, 1.18) / Math.sqrt(coreScale);
 
       return {
@@ -3538,21 +3573,123 @@
       };
     }
 
+    function getCenterStarExternalGlowProfile(star) {
+      const type = star && star.starType;
+      const variant = star && star.starVariant;
+
+      if (type === "orange") {
+        return {
+          scaleBoost: 0.58,
+          alphaBoost: 0.34,
+          alphaMultiplier: 1.12,
+          colorTarget: [255, 158, 74],
+          colorMix: 0.44,
+          canvasRadius: 1.1
+        };
+      }
+
+      if (type === "yellow") {
+        return {
+          scaleBoost: 0.44,
+          alphaBoost: 0.26,
+          alphaMultiplier: 1.08,
+          colorTarget: [255, 206, 112],
+          colorMix: 0.36,
+          canvasRadius: 1.07
+        };
+      }
+
+      if (type === "red") {
+        return {
+          scaleBoost: variant === "giant" ? 0.68 : 0.52,
+          alphaBoost: variant === "giant" ? 0.38 : 0.36,
+          alphaMultiplier: variant === "giant" ? 1.16 : 1.12,
+          colorTarget: [255, 104, 82],
+          colorMix: 0.4,
+          canvasRadius: variant === "giant" ? 1.14 : 1.1
+        };
+      }
+
+      if (type === "white" && variant === "warm") {
+        return {
+          scaleBoost: 0.34,
+          alphaBoost: 0.22,
+          alphaMultiplier: 1.06,
+          colorTarget: [255, 226, 158],
+          colorMix: 0.34,
+          canvasRadius: 1.05
+        };
+      }
+
+      return {
+        scaleBoost: 0,
+        alphaBoost: 0,
+        alphaMultiplier: 1,
+        colorTarget: null,
+        colorMix: 0,
+        canvasRadius: 1
+      };
+    }
+
+    function getCenterStarExternalGlowColor(star) {
+      const externalGlow = getCenterStarExternalGlowProfile(star);
+      if (!externalGlow.colorTarget) return star.haloColor;
+      return mixColor(star.haloColor, externalGlow.colorTarget, externalGlow.colorMix);
+    }
+
+    function drawCenterStarExternalGlow(x, y, starRadius, star, metrics, selected, time) {
+      const externalGlow = getCenterStarExternalGlowProfile(star);
+      const glowColor = getCenterStarExternalGlowColor(star);
+      const pulse = 1 + Math.sin(time * 0.0014 + star.starScale * 6.7) * 0.025;
+      const haloRadius =
+        starRadius *
+        (2.08 + externalGlow.scaleBoost * 0.58 + Math.max(0, metrics.glowScale - 4.5) * 0.12) *
+        externalGlow.canvasRadius *
+        pulse *
+        (selected ? 1.06 : 1);
+      const haloAlpha = clamp(
+        (0.058 + externalGlow.alphaBoost * 0.1) * metrics.glowAlphaScale * (selected ? 1.08 : 1),
+        0.045,
+        0.18
+      );
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const halo = ctx.createRadialGradient(x, y, starRadius * 0.58, x, y, haloRadius);
+      halo.addColorStop(0, rgba(glowColor, haloAlpha * 0.62));
+      halo.addColorStop(0.25, rgba(glowColor, haloAlpha));
+      halo.addColorStop(0.54, rgba(glowColor, haloAlpha * 0.34));
+      halo.addColorStop(0.82, rgba(glowColor, haloAlpha * 0.08));
+      halo.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(x, y, haloRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     function getCenterStarWebGLPalette(star) {
       const isBlue = star.starType === "blue";
       const isWhite = star.starType === "white";
       const isGiant = star.starVariant === "giant";
+      const externalGlow = getCenterStarExternalGlowProfile(star);
       const metrics = getCenterStarVisualMetrics(star);
       const bright = mixColor(star.coreColor, [255, 255, 255], isBlue ? 0.34 : isWhite ? 0.46 : 0.18);
       const dark = isWhite
         ? mixColor(star.haloColor, star.coreColor, 0.22)
         : mixColor(star.haloColor, star.coreColor, isGiant ? 0.42 : 0.34);
-      const glow = isBlue
+      let glow = isBlue
         ? mixColor(star.haloColor, star.coreColor, 0.38)
         : isWhite
           ? mixColor(star.haloColor, star.coreColor, 0.32)
           : mixColor(star.haloColor, star.coreColor, 0.18);
-      const glowAlpha = (isBlue ? 1.34 : isWhite ? 1.24 : isGiant ? 1.1 : 1) * metrics.glowAlphaScale;
+      glow = externalGlow.colorTarget
+        ? mixColor(glow, externalGlow.colorTarget, externalGlow.colorMix)
+        : glow;
+      const glowAlpha =
+        (isBlue ? 1.34 : isWhite ? 1.24 : isGiant ? 1.12 : 1.04) *
+        externalGlow.alphaMultiplier *
+        metrics.glowAlphaScale;
 
       return { bright, dark, glow, glowAlpha };
     }
@@ -3605,10 +3742,13 @@
       const star = getCenterStarProfile();
       const metrics = getCenterStarVisualMetrics(star);
       syncCenterStarWebGLPalette(star);
+      syncCenterStarWebGLRendererScale();
 
       const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * metrics.coreScale * (selected ? 1.92 : 1.82);
       const renderSize = CENTER_STAR_WEBGL_RENDER_SIZE;
       const imageSize = (starRadius / CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS) * renderSize;
+
+      drawCenterStarExternalGlow(x, y, starRadius, star, metrics, selected, time);
 
       centerStarWebGL.estrella.update(time * 0.001, centerStarWebGL.camera);
       centerStarWebGL.renderer.clear();
@@ -3636,12 +3776,21 @@
       const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * metrics.coreScale * (selected ? 1.92 : 1.82);
       const surfaceCanvas = updateCenterStarSurface(time, star, activeMapId || 1);
       const haloPulse = 1 + Math.sin(time * 0.0018 + node.labelFloatSeed) * 0.025;
-      const auraRadius = starRadius * star.auraScale * 0.9 * haloPulse * clamp(metrics.glowScale / 5, 0.84, 1.14);
+      const externalGlow = getCenterStarExternalGlowProfile(star);
+      const auraRadius =
+        starRadius *
+        star.auraScale *
+        0.9 *
+        haloPulse *
+        externalGlow.canvasRadius *
+        clamp(metrics.glowScale / 5, 0.84, 1.18);
+      const auraAlphaScale = 1 + externalGlow.alphaBoost * 0.8;
+      const externalGlowColor = getCenterStarExternalGlowColor(star);
 
       const aura = ctx.createRadialGradient(x, y, 0, x, y, auraRadius);
-      aura.addColorStop(0, rgba(star.haloColor, 0.18 * star.starLuminosity * metrics.glowAlphaScale));
-      aura.addColorStop(0.34, rgba(star.haloColor, 0.09 * star.starLuminosity * metrics.glowAlphaScale));
-      aura.addColorStop(0.7, rgba(star.haloColor, 0.028));
+      aura.addColorStop(0, rgba(externalGlowColor, 0.18 * star.starLuminosity * metrics.glowAlphaScale * auraAlphaScale));
+      aura.addColorStop(0.34, rgba(externalGlowColor, 0.09 * star.starLuminosity * metrics.glowAlphaScale * auraAlphaScale));
+      aura.addColorStop(0.7, rgba(externalGlowColor, 0.028 * auraAlphaScale));
       aura.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = aura;
       ctx.beginPath();
