@@ -2,11 +2,15 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0f1a22" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Contextus" />
   <title>Contextus</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <script type="importmap">
     {
       "imports": {
@@ -32,6 +36,7 @@
       --tool-bg: rgba(11, 20, 28, 0.42);
       --tool-border: rgba(200, 228, 246, 0.12);
       --tool-bg-hover: rgba(18, 31, 42, 0.72);
+      --keyboard-inset: 0px;
     }
 
     * { box-sizing: border-box; }
@@ -40,16 +45,19 @@
       margin: 0;
       width: 100%;
       height: 100%;
+      min-height: 100dvh;
       overflow: hidden;
       background: linear-gradient(180deg, var(--bg-top), var(--bg-mid) 48%, var(--bg-deep));
       font-family: Inter, ui-sans-serif, system-ui, sans-serif;
       color: var(--text);
+      overscroll-behavior: none;
     }
 
     #app {
       position: relative;
       width: 100%;
       height: 100%;
+      height: 100dvh;
       overflow: hidden;
       cursor: grab;
     }
@@ -58,12 +66,15 @@
       position: absolute;
       inset: 0;
       display: block;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
     }
 
     .floating-tools {
       position: absolute;
-      top: 18px;
-      left: 18px;
+      top: calc(14px + env(safe-area-inset-top));
+      left: calc(14px + env(safe-area-inset-left));
       z-index: 50;
       display: flex;
       gap: 10px;
@@ -71,14 +82,14 @@
 
     .maps-entry {
       position: absolute;
-      top: 18px;
-      right: 18px;
+      top: calc(14px + env(safe-area-inset-top));
+      right: calc(14px + env(safe-area-inset-right));
       z-index: 90;
     }
 
     .tool-btn {
-      width: 36px;
-      height: 36px;
+      width: 44px;
+      height: 44px;
       border-radius: 999px;
       border: 1px solid var(--tool-border);
       background: var(--tool-bg);
@@ -188,6 +199,7 @@
       background:
         radial-gradient(circle at 50% 44%, rgba(160, 186, 206, 0.14), rgba(12, 20, 28, 0.12) 24%, rgba(7, 12, 18, 0.58) 58%, rgba(4, 8, 12, 0.82) 100%),
         linear-gradient(180deg, rgba(9, 16, 22, 0.36), rgba(4, 8, 12, 0.74));
+      touch-action: none;
     }
 
     .maps-overlay.is-open {
@@ -227,11 +239,11 @@
 
     .maps-center-btn {
       position: absolute;
-      right: 20px;
-      bottom: 20px;
+      right: calc(16px + env(safe-area-inset-right));
+      bottom: calc(16px + env(safe-area-inset-bottom));
       z-index: 2;
-      width: 34px;
-      height: 34px;
+      width: 44px;
+      height: 44px;
       border-radius: 999px;
       border: 1px solid rgba(210, 228, 240, 0.1);
       background: rgba(7, 12, 18, 0.48);
@@ -458,6 +470,39 @@
       letter-spacing: 0.02em;
     }
 
+    .editor-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .editor-action-btn {
+      min-width: 104px;
+      min-height: 42px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(196, 220, 238, 0.12);
+      background: rgba(11, 19, 26, 0.72);
+      color: #d8e3eb;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: transform 0.14s ease, background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    }
+
+    .editor-action-btn:hover {
+      transform: translateY(-1px);
+      background: rgba(17, 29, 39, 0.82);
+      border-color: rgba(208, 226, 239, 0.18);
+    }
+
+    .editor-action-btn.is-primary {
+      background: rgba(218, 231, 240, 0.9);
+      border-color: rgba(238, 246, 251, 0.36);
+      color: #071018;
+    }
+
     .note-card {
       position: absolute;
       z-index: 55;
@@ -508,6 +553,62 @@
       line-height: 1.52;
       color: rgba(214, 227, 236, 0.84);
     }
+
+    @media (pointer: coarse), (max-width: 700px) {
+      .tool-btn {
+        width: 48px;
+        height: 48px;
+        font-size: 21px;
+      }
+
+      .floating-tools,
+      .maps-entry {
+        gap: 12px;
+      }
+
+      .editor {
+        position: absolute;
+        left: calc(12px + env(safe-area-inset-left)) !important;
+        right: calc(12px + env(safe-area-inset-right)) !important;
+        bottom: calc(12px + var(--keyboard-inset) + env(safe-area-inset-bottom)) !important;
+        top: auto !important;
+        width: auto;
+        max-width: none;
+      }
+
+      .editor-panel {
+        padding: 16px;
+        border-radius: 18px;
+      }
+
+      .editor input,
+      .editor textarea {
+        font-size: 16px;
+      }
+
+      .editor textarea {
+        min-height: 132px;
+        max-height: min(34vh, 260px);
+      }
+
+      .editor-actions {
+        justify-content: stretch;
+      }
+
+      .editor-action-btn {
+        flex: 1;
+        min-height: 46px;
+        font-size: 13px;
+      }
+
+      .editor-foot {
+        display: none;
+      }
+
+      .note-card {
+        display: none !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -545,7 +646,11 @@
         <div class="editor-head">Nodo</div>
         <input id="nodeInput" type="text" maxlength="64" placeholder="Titulo breve" />
         <textarea id="nodeNoteInput" maxlength="1800" placeholder="Desarrolla la idea con mas detalle..."></textarea>
-        <div class="editor-foot">Esc cancela. Ctrl+Enter guarda.</div>
+        <div class="editor-actions">
+          <button id="cancelEditorBtn" class="editor-action-btn" type="button">Cancelar</button>
+          <button id="saveEditorBtn" class="editor-action-btn is-primary" type="button">Guardar</button>
+        </div>
+        <div class="editor-foot">Ctrl+Enter guarda. Esc cancela.</div>
       </div>
     </div>
 
@@ -597,13 +702,15 @@
     const editor = document.getElementById("editor");
     const nodeInput = document.getElementById("nodeInput");
     const nodeNoteInput = document.getElementById("nodeNoteInput");
+    const cancelEditorBtn = document.getElementById("cancelEditorBtn");
+    const saveEditorBtn = document.getElementById("saveEditorBtn");
     const noteCard = document.getElementById("noteCard");
     const noteCardTitle = document.getElementById("noteCardTitle");
     const noteCardBody = document.getElementById("noteCardBody");
 
     let width = 0;
     let height = 0;
-    let dpr = Math.max(1, window.devicePixelRatio || 1);
+    let dpr = 1;
 
     const nodes = [];
     const links = [];
@@ -655,6 +762,43 @@
     let overlayDraggedMapDriftX = 0;
     let overlayDraggedMapDriftY = 0;
     const adjacentNoteCards = new Map();
+    const mainTouchPointers = new Map();
+    const overlayTouchPointers = new Map();
+
+    const TOUCH_MOVE_THRESHOLD = 7;
+    const DOUBLE_TAP_DELAY = 650;
+    const DOUBLE_TAP_DISTANCE = 30;
+
+    let mainTouchPrimaryId = null;
+    let mainTouchMode = null;
+    let mainTouchStartX = 0;
+    let mainTouchStartY = 0;
+    let mainTouchMoved = false;
+    let mainTouchPinchState = null;
+    let mainSuppressMouseUntil = 0;
+    const lastMainTap = {
+      time: 0,
+      nodeId: null,
+      x: 0,
+      y: 0
+    };
+
+    let overlayTouchPrimaryId = null;
+    let overlayTouchMode = null;
+    let overlayTouchStartX = 0;
+    let overlayTouchStartY = 0;
+    let overlayTouchMoved = false;
+    let overlayTouchPinchState = null;
+    let overlaySuppressMouseUntil = 0;
+    const lastOverlayTap = {
+      time: 0,
+      empty: false,
+      x: 0,
+      y: 0
+    };
+
+    let renderFrameId = null;
+    let renderPaused = false;
 
     const overlayPointer = {
       x: 0,
@@ -891,6 +1035,49 @@
             console.warn("No se pudo registrar el service worker:", error);
           });
       });
+    }
+
+    function isCoarsePointer() {
+      return Boolean(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+    }
+
+    function isMobileViewport() {
+      return isCoarsePointer() || Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 760;
+    }
+
+    function getViewportSize() {
+      const visualViewport = window.visualViewport;
+      return {
+        width: Math.max(1, Math.round(visualViewport ? visualViewport.width : window.innerWidth)),
+        height: Math.max(1, Math.round(visualViewport ? visualViewport.height : window.innerHeight))
+      };
+    }
+
+    function updateViewportInsets() {
+      const visualViewport = window.visualViewport;
+      const keyboardInset = visualViewport
+        ? Math.max(0, window.innerHeight - visualViewport.height - visualViewport.offsetTop)
+        : 0;
+      document.documentElement.style.setProperty("--keyboard-inset", `${Math.round(keyboardInset)}px`);
+    }
+
+    function getCanvasPixelRatio() {
+      const rawRatio = Math.max(1, window.devicePixelRatio || 1);
+      return clamp(rawRatio, 1, isMobileViewport() ? 2 : 2.5);
+    }
+
+    function isTouchPointerEvent(event) {
+      return event.pointerType === "touch" || event.pointerType === "pen";
+    }
+
+    function blockSyntheticMouse(kind) {
+      const until = Date.now() + 700;
+      if (kind === "overlay") overlaySuppressMouseUntil = until;
+      else mainSuppressMouseUntil = until;
+    }
+
+    function isSyntheticMouseBlocked(kind) {
+      return Date.now() < (kind === "overlay" ? overlaySuppressMouseUntil : mainSuppressMouseUntil);
     }
 
     function toFiniteNumber(value, fallback = 0) {
@@ -1250,20 +1437,22 @@
     }
 
     function resize() {
-      width = window.innerWidth;
-      height = window.innerHeight;
-      dpr = Math.max(1, window.devicePixelRatio || 1);
+      const viewport = getViewportSize();
+      width = viewport.width;
+      height = viewport.height;
+      dpr = getCanvasPixelRatio();
+      updateViewportInsets();
 
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
+      canvas.width = Math.max(1, Math.round(width * dpr));
+      canvas.height = Math.max(1, Math.round(height * dpr));
       canvas.style.width = width + "px";
       canvas.style.height = height + "px";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
 
-      mapsCanvas.width = width * dpr;
-      mapsCanvas.height = height * dpr;
+      mapsCanvas.width = Math.max(1, Math.round(width * dpr));
+      mapsCanvas.height = Math.max(1, Math.round(height * dpr));
       mapsCanvas.style.width = width + "px";
       mapsCanvas.style.height = height + "px";
       mapsCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1811,6 +2000,8 @@
       draggedNodeId = null;
       panning = false;
       pointerMoved = false;
+      mainTouchPointers.clear();
+      resetOverlayTouchState(true);
 
       app.style.cursor = mapsOverlayOpen ? "default" : "grab";
       editor.style.display = "none";
@@ -2007,6 +2198,8 @@
       overlayMapDragOffsetY = 0;
       overlayDraggedMapDriftX = 0;
       overlayDraggedMapDriftY = 0;
+      mainTouchPointers.clear();
+      overlayTouchPointers.clear();
       draggedNodeId = null;
       panning = false;
 
@@ -2048,6 +2241,8 @@
       overlayMapDragOffsetY = 0;
       overlayDraggedMapDriftX = 0;
       overlayDraggedMapDriftY = 0;
+      mainTouchPointers.clear();
+      overlayTouchPointers.clear();
       settleMapsCamera();
       closeDeleteConfirmation();
       hideNoteCard();
@@ -2329,6 +2524,44 @@
         x: e.clientX - rect.left,
         y: e.clientY - rect.top
       };
+    }
+
+    function storePointerPosition(pointerMap, event, targetElement = canvas) {
+      const point = pointerPosition(event, targetElement);
+      pointerMap.set(event.pointerId, point);
+      return point;
+    }
+
+    function getTwoPointerGesture(pointerMap) {
+      const points = [...pointerMap.values()];
+      if (points.length < 2) return null;
+
+      const a = points[0];
+      const b = points[1];
+      const distance = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
+      return {
+        distance,
+        midpoint: {
+          x: (a.x + b.x) * 0.5,
+          y: (a.y + b.y) * 0.5
+        }
+      };
+    }
+
+    function releasePointerCaptureSafely(element, pointerId) {
+      try {
+        if (element.hasPointerCapture && element.hasPointerCapture(pointerId)) {
+          element.releasePointerCapture(pointerId);
+        }
+      } catch (error) {
+        // Pointer capture can already be gone after platform-level cancellation.
+      }
+    }
+
+    function isDoubleTap(previousTap, x, y, matchesTarget = true) {
+      return matchesTarget &&
+        performance.now() - previousTap.time <= DOUBLE_TAP_DELAY &&
+        Math.hypot(x - previousTap.x, y - previousTap.y) <= DOUBLE_TAP_DISTANCE;
     }
 
     function screenToWorld(
@@ -4249,18 +4482,23 @@
     function resolveConstellationTarget(x, y) {
       if (pendingDeleteMapId !== null) return null;
 
-      if (hoveredMapId !== null) {
-        const hoveredItem = constellationItems.find(item => item.kind === "map" && item.mapId === hoveredMapId);
-        const hoveredDeleteControl = getConstellationDeleteControl(hoveredItem);
+      const deleteControlMapIds = [
+        hoveredMapId,
+        isCoarsePointer() ? overlaySelectedMapId : null
+      ].filter((mapId, index, ids) => mapId !== null && ids.indexOf(mapId) === index);
+
+      for (const mapId of deleteControlMapIds) {
+        const deleteItem = constellationItems.find(item => item.kind === "map" && item.mapId === mapId);
+        const deleteControl = getConstellationDeleteControl(deleteItem);
         if (
-          hoveredItem &&
-          hoveredDeleteControl &&
-          pointInCircle(x, y, hoveredDeleteControl.x, hoveredDeleteControl.y, hoveredDeleteControl.hitRadius)
+          deleteItem &&
+          deleteControl &&
+          pointInCircle(x, y, deleteControl.x, deleteControl.y, deleteControl.hitRadius)
         ) {
           return {
             kind: "delete",
-            item: hoveredItem,
-            control: hoveredDeleteControl
+            item: deleteItem,
+            control: deleteControl
           };
         }
       }
@@ -4927,9 +5165,6 @@
         ? resolveConstellationTarget(overlayPointer.x, overlayPointer.y)
         : null;
       const hoveredItem = hoveredTarget ? hoveredTarget.item : null;
-      const hoveredDeleteControl = hoveredTarget && hoveredTarget.kind === "delete"
-        ? hoveredTarget.control
-        : null;
       const selectedItem = overlaySelectedMapId !== null
         ? constellationItems.find(item => item.kind === "map" && item.mapId === overlaySelectedMapId)
         : null;
@@ -4948,10 +5183,16 @@
         }
       }
 
-      if (!pendingDeleteMapId && !overlayEnterState && !overlayCreateState && hoveredItem && hoveredItem.kind === "map") {
+      const deleteControlItem = hoveredItem && hoveredItem.kind === "map"
+        ? hoveredItem
+        : isCoarsePointer()
+          ? selectedItem
+          : null;
+
+      if (!pendingDeleteMapId && !overlayEnterState && !overlayCreateState && deleteControlItem && deleteControlItem.kind === "map") {
         drawConstellationDeleteControl(
-          getConstellationDeleteControl(hoveredItem),
-          Boolean(hoveredDeleteControl)
+          getConstellationDeleteControl(deleteControlItem),
+          Boolean(hoveredTarget && hoveredTarget.kind === "delete" && hoveredTarget.item === deleteControlItem)
         );
       }
 
@@ -5014,6 +5255,9 @@
     }
 
     function render(time) {
+      renderFrameId = null;
+      if (renderPaused) return;
+
       ctx.clearRect(0, 0, width, height);
       drawBackground(time);
       updateNodes();
@@ -5030,7 +5274,21 @@
 
       if (mapsOverlayOpen) drawConstellation(time);
       else mapsCtx.clearRect(0, 0, width, height);
-      requestAnimationFrame(render);
+      renderFrameId = requestAnimationFrame(render);
+    }
+
+    function startRenderLoop() {
+      if (renderFrameId !== null) return;
+      renderPaused = false;
+      renderFrameId = requestAnimationFrame(render);
+    }
+
+    function stopRenderLoop() {
+      renderPaused = true;
+      if (renderFrameId !== null) {
+        cancelAnimationFrame(renderFrameId);
+        renderFrameId = null;
+      }
     }
 
     function positionEditor() {
@@ -5090,6 +5348,8 @@
       editor.classList.remove("is-visible");
       nodeInput.value = "";
       nodeNoteInput.value = "";
+      nodeInput.blur();
+      nodeNoteInput.blur();
     }
 
     function restoreWorkspace(restoredMaps, nextActiveMapId, nextMapIdCounter, nextMapsViewState = null, shouldResave = false) {
@@ -5129,6 +5389,531 @@
       }, 140);
     }
 
+    function commitDraggedMainNodeMove() {
+      if (!draggedNodeId || !pointerMoved) return false;
+
+      const movedNode = getNodeById(draggedNodeId);
+      if (!movedNode) return false;
+
+      commitLocalTransaction("moveNode", {
+        mapId: activeMapId,
+        nodeId: movedNode.id,
+        from: { x: dragStartX, y: dragStartY },
+        to: { x: movedNode.x, y: movedNode.y }
+      }, { syncActiveMap: true });
+      return true;
+    }
+
+    function resetMainTouchState(clearPointers = false) {
+      if (clearPointers) mainTouchPointers.clear();
+      mainTouchPrimaryId = null;
+      mainTouchMode = null;
+      mainTouchMoved = false;
+      mainTouchPinchState = null;
+      draggedNodeId = null;
+      dragStartX = 0;
+      dragStartY = 0;
+      panning = false;
+      app.style.cursor = mapsOverlayOpen ? "default" : "grab";
+    }
+
+    function beginMainPinchGesture() {
+      const gesture = getTwoPointerGesture(mainTouchPointers);
+      if (!gesture) return;
+
+      const worldMidpoint = screenToWorld(
+        gesture.midpoint.x,
+        gesture.midpoint.y,
+        camera.targetZoom,
+        camera.targetX,
+        camera.targetY
+      );
+
+      mainTouchPinchState = {
+        startDistance: gesture.distance,
+        startZoom: camera.targetZoom,
+        worldMidpoint
+      };
+      mainTouchMode = "pinch";
+      pointerMoved = true;
+      app.style.cursor = "grabbing";
+    }
+
+    function updateMainPinchGesture() {
+      const gesture = getTwoPointerGesture(mainTouchPointers);
+      if (!gesture || !mainTouchPinchState) return;
+
+      const nextZoom = clamp(
+        mainTouchPinchState.startZoom * (gesture.distance / mainTouchPinchState.startDistance),
+        D0_ZOOM_MIN,
+        D0_ZOOM_MAX
+      );
+
+      camera.targetZoom = nextZoom;
+      camera.targetX = gesture.midpoint.x - mainTouchPinchState.worldMidpoint.x * nextZoom;
+      camera.targetY = gesture.midpoint.y - mainTouchPinchState.worldMidpoint.y * nextZoom;
+      camera.zoom = nextZoom;
+      camera.x = camera.targetX;
+      camera.y = camera.targetY;
+    }
+
+    function handleMainTouchTap(point) {
+      const node = getNodeAtScreen(point.x, point.y);
+
+      if (!node) {
+        if (selectedNodeId !== null) selectedNodeId = null;
+        lastMainTap.time = performance.now();
+        lastMainTap.nodeId = null;
+        lastMainTap.x = point.x;
+        lastMainTap.y = point.y;
+        return;
+      }
+
+      const repeatedSelectedTap = selectedNodeId === node.id && lastMainTap.nodeId === node.id;
+      const doubleTap = isDoubleTap(
+        lastMainTap,
+        point.x,
+        point.y,
+        lastMainTap.nodeId === node.id
+      ) || (isMobileViewport() && repeatedSelectedTap);
+
+      selectedNodeId = node.id;
+      triggerExpand(node);
+
+      lastMainTap.time = performance.now();
+      lastMainTap.nodeId = node.id;
+      lastMainTap.x = point.x;
+      lastMainTap.y = point.y;
+
+      if (doubleTap) openEditor(node);
+    }
+
+    function handleMainPointerDown(e) {
+      if (!isTouchPointerEvent(e) || mapsOverlayOpen) return;
+
+      e.preventDefault();
+      blockSyntheticMouse("main");
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch (error) {
+        // Some browsers may decline capture during gesture transitions.
+      }
+
+      const point = storePointerPosition(mainTouchPointers, e, canvas);
+
+      if (mainTouchPointers.size === 1) {
+        closeEditor(true);
+        pointerMoved = false;
+        mainTouchMoved = false;
+        mainTouchPrimaryId = e.pointerId;
+        mainTouchStartX = point.x;
+        mainTouchStartY = point.y;
+
+        const node = getNodeAtScreen(point.x, point.y);
+        if (node) {
+          mainTouchMode = "node";
+          draggedNodeId = node.id;
+          const world = screenToWorld(point.x, point.y);
+          dragOffsetX = world.x - node.x;
+          dragOffsetY = world.y - node.y;
+          dragStartX = node.x;
+          dragStartY = node.y;
+        } else {
+          mainTouchMode = "pan";
+          panning = true;
+          panLastX = point.x;
+          panLastY = point.y;
+          app.style.cursor = "grabbing";
+        }
+        return;
+      }
+
+      if (mainTouchPointers.size === 2) {
+        commitDraggedMainNodeMove();
+        draggedNodeId = null;
+        panning = false;
+        beginMainPinchGesture();
+      }
+    }
+
+    function handleMainPointerMove(e) {
+      if (!isTouchPointerEvent(e) || !mainTouchPointers.has(e.pointerId)) return;
+
+      e.preventDefault();
+      blockSyntheticMouse("main");
+      const point = storePointerPosition(mainTouchPointers, e, canvas);
+
+      if (mainTouchMode === "pinch") {
+        updateMainPinchGesture();
+        return;
+      }
+
+      if (e.pointerId !== mainTouchPrimaryId) return;
+
+      const totalDx = point.x - mainTouchStartX;
+      const totalDy = point.y - mainTouchStartY;
+      if (!mainTouchMoved && Math.hypot(totalDx, totalDy) < TOUCH_MOVE_THRESHOLD) return;
+
+      mainTouchMoved = true;
+      pointerMoved = true;
+
+      if (draggedNodeId) {
+        const world = screenToWorld(point.x, point.y);
+        const node = getNodeById(draggedNodeId);
+        if (!node) return;
+
+        const nextX = world.x - dragOffsetX;
+        const nextY = world.y - dragOffsetY;
+
+        node.vx = (nextX - node.x) * 0.32;
+        node.vy = (nextY - node.y) * 0.32;
+        node.x = nextX;
+        node.y = nextY;
+        return;
+      }
+
+      if (panning) {
+        const dx = point.x - panLastX;
+        const dy = point.y - panLastY;
+
+        camera.targetX += dx;
+        camera.targetY += dy;
+        camera.x += dx;
+        camera.y += dy;
+
+        panLastX = point.x;
+        panLastY = point.y;
+      }
+    }
+
+    function handleMainPointerEnd(e) {
+      if (!isTouchPointerEvent(e) || !mainTouchPointers.has(e.pointerId)) return;
+
+      e.preventDefault();
+      blockSyntheticMouse("main");
+      const point = storePointerPosition(mainTouchPointers, e, canvas);
+      const wasPrimaryPointer = e.pointerId === mainTouchPrimaryId;
+      const wasPinching = mainTouchMode === "pinch";
+
+      mainTouchPointers.delete(e.pointerId);
+      releasePointerCaptureSafely(canvas, e.pointerId);
+
+      if (wasPinching) {
+        if (mainTouchPointers.size === 0) {
+          scheduleSave("mainCanvasTouchPinch");
+          resetMainTouchState(false);
+        }
+        return;
+      }
+
+      if (!wasPrimaryPointer) return;
+
+      if (!mainTouchMoved) {
+        handleMainTouchTap(point);
+      } else if (draggedNodeId) {
+        commitDraggedMainNodeMove();
+      } else if (panning) {
+        commitLocalTransaction("updateViewFrame", createViewFramePayload("mainCanvasTouchPan"), { syncActiveMap: true });
+      }
+
+      resetMainTouchState(true);
+    }
+
+    function commitDraggedOverlayMapMove(draggedMapId = draggedOverlayMapId, start = { x: overlayMapDragStartX, y: overlayMapDragStartY }) {
+      if (draggedMapId === null || !overlayPointerMoved) return false;
+
+      const map = getMapById(draggedMapId);
+      commitLocalTransaction("moveConstellationMap", {
+        mapId: draggedMapId,
+        from: start,
+        to: cloneConstellationPosition(map && map.constellationPosition)
+      }, { syncActiveMap: false });
+      return true;
+    }
+
+    function resetOverlayTouchState(clearPointers = false) {
+      if (clearPointers) overlayTouchPointers.clear();
+      overlayTouchPrimaryId = null;
+      overlayTouchMode = null;
+      overlayTouchMoved = false;
+      overlayTouchPinchState = null;
+      overlayPanning = false;
+      overlayPointerMoved = false;
+      draggedOverlayMapId = null;
+      overlayMapDragOffsetX = 0;
+      overlayMapDragOffsetY = 0;
+      overlayMapDragStartX = 0;
+      overlayMapDragStartY = 0;
+      overlayDraggedMapDriftX = 0;
+      overlayDraggedMapDriftY = 0;
+      mapsOverlay.style.cursor = "default";
+    }
+
+    function beginOverlayPinchGesture() {
+      const gesture = getTwoPointerGesture(overlayTouchPointers);
+      if (!gesture) return;
+
+      const worldMidpoint = screenToConstellationWorld(
+        gesture.midpoint.x,
+        gesture.midpoint.y,
+        mapsCamera.targetZoom,
+        mapsCamera.targetX,
+        mapsCamera.targetY
+      );
+
+      overlayTouchPinchState = {
+        startDistance: gesture.distance,
+        startZoom: mapsCamera.targetZoom,
+        worldMidpoint
+      };
+      overlayTouchMode = "pinch";
+      overlayPointerMoved = true;
+      mapsOverlay.style.cursor = "grabbing";
+    }
+
+    function updateOverlayPinchGesture() {
+      const gesture = getTwoPointerGesture(overlayTouchPointers);
+      if (!gesture || !overlayTouchPinchState) return;
+
+      const nextZoom = clamp(
+        overlayTouchPinchState.startZoom * (gesture.distance / overlayTouchPinchState.startDistance),
+        MAPS_ZOOM_MIN,
+        MAPS_ZOOM_MAX
+      );
+
+      mapsCamera.targetZoom = nextZoom;
+      mapsCamera.targetX = overlayTouchPinchState.worldMidpoint.x - (gesture.midpoint.x - width * 0.5) / nextZoom;
+      mapsCamera.targetY = overlayTouchPinchState.worldMidpoint.y - (gesture.midpoint.y - height * 0.5) / nextZoom;
+      mapsCamera.zoom = nextZoom;
+      mapsCamera.x = mapsCamera.targetX;
+      mapsCamera.y = mapsCamera.targetY;
+      overlayPointer.x = gesture.midpoint.x;
+      overlayPointer.y = gesture.midpoint.y;
+      overlayPointer.inside = true;
+    }
+
+    function handleMapsOverlayTap(x, y) {
+      if (!mapsOverlayOpen || isOverlayEntering()) return;
+
+      if (pendingDeleteMapId !== null) {
+        closeDeleteConfirmation();
+        return;
+      }
+
+      const target = resolveConstellationTarget(x, y);
+
+      if (isOverlayCreating()) {
+        if (!target) {
+          createMapInConstellationAtWorldPoint(screenToConstellationWorld(x, y));
+          return;
+        }
+
+        if (target.kind === "new") {
+          cancelOverlayCreateMode();
+          return;
+        }
+
+        cancelOverlayCreateMode();
+        return;
+      }
+
+      if (!target) {
+        overlaySelectedMapId = null;
+        hoveredMapId = null;
+        clearMapsLabel();
+        updateMapsCenterButton();
+        return;
+      }
+
+      if (target.kind === "delete") {
+        openDeleteConfirmation(target.item.mapId);
+        return;
+      }
+
+      if (target.kind === "new") {
+        createNewMap();
+        return;
+      }
+
+      if (overlaySelectedMapId === target.item.mapId) {
+        startOverlayEntryTransition(target.item.mapId);
+        return;
+      }
+
+      overlaySelectedMapId = target.item.mapId;
+      hoveredMapId = target.item.mapId;
+      updateMapsCenterButton();
+    }
+
+    function handleOverlayTouchTap(point) {
+      const target = pendingDeleteMapId === null ? resolveConstellationTarget(point.x, point.y) : null;
+      const emptyDoubleTap = !target &&
+        pendingDeleteMapId === null &&
+        !isOverlayCreating() &&
+        isDoubleTap(lastOverlayTap, point.x, point.y, lastOverlayTap.empty);
+
+      lastOverlayTap.time = performance.now();
+      lastOverlayTap.empty = !target;
+      lastOverlayTap.x = point.x;
+      lastOverlayTap.y = point.y;
+
+      if (emptyDoubleTap) {
+        createMapInConstellationAtWorldPoint(screenToConstellationWorld(point.x, point.y));
+        return;
+      }
+
+      handleMapsOverlayTap(point.x, point.y);
+    }
+
+    function handleOverlayPointerDown(e) {
+      if (!isTouchPointerEvent(e) || !mapsOverlayOpen || isOverlayEntering()) return;
+
+      e.preventDefault();
+      blockSyntheticMouse("overlay");
+      try {
+        mapsOverlay.setPointerCapture(e.pointerId);
+      } catch (error) {
+        // Some browsers may decline capture during gesture transitions.
+      }
+
+      const point = storePointerPosition(overlayTouchPointers, e, mapsOverlay);
+      overlayPointer.x = point.x;
+      overlayPointer.y = point.y;
+      overlayPointer.inside = true;
+
+      if (overlayTouchPointers.size === 1) {
+        overlayTouchPrimaryId = e.pointerId;
+        overlayTouchMoved = false;
+        overlayPointerMoved = false;
+        overlayTouchStartX = point.x;
+        overlayTouchStartY = point.y;
+        overlayTouchMode = "tap";
+
+        if (pendingDeleteMapId !== null || isOverlayCreating()) return;
+
+        const target = resolveConstellationTarget(point.x, point.y);
+        if (target && target.kind === "map") {
+          const world = screenToConstellationWorld(point.x, point.y);
+          draggedOverlayMapId = target.item.mapId;
+          overlayMapDragOffsetX = world.x - (target.item.worldX + target.item.driftX);
+          overlayMapDragOffsetY = world.y - (target.item.worldY + target.item.driftY);
+          overlayMapDragStartX = target.item.worldX;
+          overlayMapDragStartY = target.item.worldY;
+          overlayDraggedMapDriftX = target.item.driftX;
+          overlayDraggedMapDriftY = target.item.driftY;
+          overlayTouchMode = "map";
+          mapsOverlay.style.cursor = "grabbing";
+          return;
+        }
+
+        if (!target) {
+          overlayPanning = true;
+          overlayPanLastX = point.x;
+          overlayPanLastY = point.y;
+          overlayTouchMode = "pan";
+          mapsOverlay.style.cursor = "grabbing";
+        }
+        return;
+      }
+
+      if (overlayTouchPointers.size === 2) {
+        commitDraggedOverlayMapMove();
+        overlayPanning = false;
+        draggedOverlayMapId = null;
+        beginOverlayPinchGesture();
+      }
+    }
+
+    function handleOverlayPointerMove(e) {
+      if (!isTouchPointerEvent(e) || !overlayTouchPointers.has(e.pointerId)) return;
+
+      e.preventDefault();
+      blockSyntheticMouse("overlay");
+      const point = storePointerPosition(overlayTouchPointers, e, mapsOverlay);
+      overlayPointer.x = point.x;
+      overlayPointer.y = point.y;
+      overlayPointer.inside = true;
+
+      if (overlayTouchMode === "pinch") {
+        updateOverlayPinchGesture();
+        return;
+      }
+
+      if (e.pointerId !== overlayTouchPrimaryId) return;
+
+      const totalDx = point.x - overlayTouchStartX;
+      const totalDy = point.y - overlayTouchStartY;
+      if (!overlayTouchMoved && Math.hypot(totalDx, totalDy) < TOUCH_MOVE_THRESHOLD) return;
+
+      overlayTouchMoved = true;
+      overlayPointerMoved = true;
+
+      if (overlayPanning) {
+        const dx = point.x - overlayPanLastX;
+        const dy = point.y - overlayPanLastY;
+
+        if (dx !== 0 || dy !== 0) {
+          mapsCamera.targetX -= dx / Math.max(mapsCamera.zoom, 0.0001);
+          mapsCamera.targetY -= dy / Math.max(mapsCamera.zoom, 0.0001);
+          mapsCamera.x = mapsCamera.targetX;
+          mapsCamera.y = mapsCamera.targetY;
+        }
+
+        overlayPanLastX = point.x;
+        overlayPanLastY = point.y;
+        return;
+      }
+
+      if (draggedOverlayMapId !== null) {
+        const world = screenToConstellationWorld(point.x, point.y);
+        const nextX = world.x - overlayMapDragOffsetX - overlayDraggedMapDriftX;
+        const nextY = world.y - overlayMapDragOffsetY - overlayDraggedMapDriftY;
+
+        setMapConstellationPosition(draggedOverlayMapId, nextX, nextY);
+      }
+    }
+
+    function handleOverlayPointerEnd(e) {
+      if (!isTouchPointerEvent(e) || !overlayTouchPointers.has(e.pointerId)) return;
+
+      e.preventDefault();
+      blockSyntheticMouse("overlay");
+      const point = storePointerPosition(overlayTouchPointers, e, mapsOverlay);
+      const wasPrimaryPointer = e.pointerId === overlayTouchPrimaryId;
+      const wasPinching = overlayTouchMode === "pinch";
+      const draggedMap = draggedOverlayMapId !== null;
+      const draggedMapId = draggedOverlayMapId;
+      const draggedMapStart = { x: overlayMapDragStartX, y: overlayMapDragStartY };
+
+      overlayTouchPointers.delete(e.pointerId);
+      releasePointerCaptureSafely(mapsOverlay, e.pointerId);
+
+      if (wasPinching) {
+        if (overlayTouchPointers.size === 0) {
+          scheduleSave("mapsOverlayTouchPinch");
+          resetOverlayTouchState(false);
+        }
+        return;
+      }
+
+      if (!wasPrimaryPointer) return;
+
+      if (!overlayTouchMoved) {
+        handleOverlayTouchTap(point);
+      } else if (draggedMap) {
+        commitDraggedOverlayMapMove(draggedMapId, draggedMapStart);
+      } else if (overlayPanning) {
+        commitLocalTransaction("updateViewFrame", createViewFramePayload("mapsOverlayTouchPan"), { syncActiveMap: false });
+      }
+
+      resetOverlayTouchState(true);
+    }
+
+    canvas.addEventListener("pointerdown", handleMainPointerDown, { passive: false });
+    canvas.addEventListener("pointermove", handleMainPointerMove, { passive: false });
+    canvas.addEventListener("pointerup", handleMainPointerEnd, { passive: false });
+    canvas.addEventListener("pointercancel", handleMainPointerEnd, { passive: false });
+
     canvas.addEventListener("wheel", (e) => {
       if (mapsOverlayOpen) return;
 
@@ -5152,6 +5937,7 @@
     }, { passive: false });
 
     canvas.addEventListener("mousedown", (e) => {
+      if (isSyntheticMouseBlocked("main")) return;
       if (mapsOverlayOpen) return;
 
       closeEditor(true);
@@ -5176,6 +5962,7 @@
     });
 
     canvas.addEventListener("mousemove", (e) => {
+      if (isSyntheticMouseBlocked("main")) return;
       if (mapsOverlayOpen) return;
 
       const { x, y } = pointerPosition(e);
@@ -5216,6 +6003,7 @@
     });
 
     canvas.addEventListener("mouseup", (e) => {
+      if (isSyntheticMouseBlocked("main")) return;
       if (mapsOverlayOpen) return;
 
       const { x, y } = pointerPosition(e);
@@ -5253,6 +6041,7 @@
     });
 
     canvas.addEventListener("mouseleave", () => {
+      if (isSyntheticMouseBlocked("main")) return;
       if (mapsOverlayOpen) return;
 
       if (draggedNodeId && pointerMoved) {
@@ -5276,6 +6065,7 @@
     });
 
     canvas.addEventListener("dblclick", (e) => {
+      if (isSyntheticMouseBlocked("main")) return;
       if (mapsOverlayOpen) return;
 
       const { x, y } = pointerPosition(e);
@@ -5287,7 +6077,13 @@
       }
     });
 
+    mapsOverlay.addEventListener("pointerdown", handleOverlayPointerDown, { passive: false });
+    mapsOverlay.addEventListener("pointermove", handleOverlayPointerMove, { passive: false });
+    mapsOverlay.addEventListener("pointerup", handleOverlayPointerEnd, { passive: false });
+    mapsOverlay.addEventListener("pointercancel", handleOverlayPointerEnd, { passive: false });
+
     mapsOverlay.addEventListener("mousemove", (e) => {
+      if (isSyntheticMouseBlocked("overlay")) return;
       if (!mapsOverlayOpen || isOverlayEntering()) return;
 
       const { x, y } = pointerPosition(e, mapsOverlay);
@@ -5350,6 +6146,7 @@
     }, { passive: false });
 
     mapsOverlay.addEventListener("mousedown", (e) => {
+      if (isSyntheticMouseBlocked("overlay")) return;
       if (!mapsOverlayOpen || pendingDeleteMapId !== null || isOverlayEntering()) return;
 
       const { x, y } = pointerPosition(e, mapsOverlay);
@@ -5386,6 +6183,7 @@
     });
 
     mapsOverlay.addEventListener("mouseup", () => {
+      if (isSyntheticMouseBlocked("overlay")) return;
       const moved = overlayPointerMoved;
       const draggedMap = draggedOverlayMapId !== null;
       const draggedMapId = draggedOverlayMapId;
@@ -5417,6 +6215,7 @@
     });
 
     mapsOverlay.addEventListener("mouseleave", () => {
+      if (isSyntheticMouseBlocked("overlay")) return;
       const draggedMap = draggedOverlayMapId !== null;
       const draggedMapId = draggedOverlayMapId;
       const draggedMapStart = { x: overlayMapDragStartX, y: overlayMapDragStartY };
@@ -5467,7 +6266,16 @@
       e.stopPropagation();
     });
 
+    centerMapsBtn.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+    });
+
+    centerMapsBtn.addEventListener("pointerup", (e) => {
+      e.stopPropagation();
+    });
+
     mapsOverlay.addEventListener("click", (e) => {
+      if (isSyntheticMouseBlocked("overlay")) return;
       if (!mapsOverlayOpen || isOverlayEntering()) return;
 
       if (overlaySuppressClick) {
@@ -5481,52 +6289,11 @@
       }
 
       const { x, y } = pointerPosition(e, mapsOverlay);
-      const target = resolveConstellationTarget(x, y);
-
-      if (isOverlayCreating()) {
-        if (!target) {
-          createMapInConstellationAtWorldPoint(screenToConstellationWorld(x, y));
-          return;
-        }
-
-        if (target.kind === "new") {
-          cancelOverlayCreateMode();
-          return;
-        }
-
-        cancelOverlayCreateMode();
-        return;
-      }
-
-      if (!target) {
-        overlaySelectedMapId = null;
-        hoveredMapId = null;
-        clearMapsLabel();
-        updateMapsCenterButton();
-        return;
-      }
-
-      if (target.kind === "delete") {
-        openDeleteConfirmation(target.item.mapId);
-        return;
-      }
-
-      if (target.kind === "new") {
-        createNewMap();
-        return;
-      }
-
-      if (overlaySelectedMapId === target.item.mapId) {
-        startOverlayEntryTransition(target.item.mapId);
-        return;
-      }
-
-      overlaySelectedMapId = target.item.mapId;
-      hoveredMapId = target.item.mapId;
-      updateMapsCenterButton();
+      handleMapsOverlayTap(x, y);
     });
 
     mapsOverlay.addEventListener("dblclick", (e) => {
+      if (isSyntheticMouseBlocked("overlay")) return;
       if (!mapsOverlayOpen || pendingDeleteMapId !== null || isOverlayEntering() || isOverlayCreating()) return;
 
       const { x, y } = pointerPosition(e, mapsOverlay);
@@ -5543,6 +6310,22 @@
     });
 
     mapsConfirmPanel.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+
+    mapsConfirmPanel.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+    });
+
+    mapsConfirmPanel.addEventListener("pointermove", (e) => {
+      e.stopPropagation();
+    });
+
+    mapsConfirmPanel.addEventListener("pointerup", (e) => {
+      e.stopPropagation();
+    });
+
+    mapsConfirmPanel.addEventListener("pointercancel", (e) => {
       e.stopPropagation();
     });
 
@@ -5571,6 +6354,14 @@
     openMapsBtn.addEventListener("click", () => {
       closeEditor(true);
       toggleMapsOverlay();
+    });
+
+    cancelEditorBtn.addEventListener("click", () => {
+      closeEditor(false);
+    });
+
+    saveEditorBtn.addEventListener("click", () => {
+      closeEditor(true);
     });
 
     nodeInput.addEventListener("keydown", (e) => {
@@ -5622,9 +6413,15 @@
     });
 
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) return;
+      if (!document.hidden) {
+        resize();
+        startRenderLoop();
+        return;
+      }
+
       altRevealActive = false;
       hideAdjacentNoteCards();
+      stopRenderLoop();
     });
 
     window.addEventListener("keydown", (e) => {
@@ -5659,10 +6456,17 @@
     });
 
     window.addEventListener("resize", resize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", resize);
+      window.visualViewport.addEventListener("scroll", () => {
+        updateViewportInsets();
+        if (editingNodeId) positionEditor();
+      });
+    }
 
     registerServiceWorker();
     resize();
-    requestAnimationFrame(render);
+    startRenderLoop();
   </script>
 </body>
 </html>
