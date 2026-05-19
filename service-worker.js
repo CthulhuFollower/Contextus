@@ -44,11 +44,23 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", copy));
+          if (response && response.status === 200) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request.url, copy);
+              cache.put("./index.html", copy);
+            });
+          }
           return response;
         })
-        .catch(() => caches.match("./index.html"))
+        .catch(() => {
+          return caches.match("./index.html")
+            .then((cached) => {
+              if (cached) return cached;
+              return caches.match("/index.html")
+                .then((cached2) => cached2 || caches.match("/"));
+            });
+        })
     );
     return;
   }
@@ -57,15 +69,19 @@ self.addEventListener("fetch", (event) => {
     caches.match(request).then((cached) => {
       if (cached) return cached;
 
-      return fetch(request).then((response) => {
-        if (!response || response.status !== 200 || response.type === "opaque") {
-          return response;
-        }
+      return fetch(request)
+        .then((response) => {
+          if (!response || response.status !== 200 || response.type === "opaque") {
+            return response;
+          }
 
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-        return response;
-      });
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          return response;
+        })
+        .catch(() => {
+          return caches.match("./index.html");
+        });
     })
   );
 });

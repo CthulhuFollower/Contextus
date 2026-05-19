@@ -799,6 +799,7 @@
 
     let renderFrameId = null;
     let renderPaused = false;
+    let lastRenderTimestamp = 0;
 
     const overlayPointer = {
       x: 0,
@@ -1005,13 +1006,16 @@
       seed: 0,
       imageData: null
     };
-    const CENTER_STAR_WEBGL_RENDER_SIZE = 1024;
-    const CENTER_STAR_WEBGL_PIXEL_RATIO_MAX = 2;
+    const CENTER_STAR_WEBGL_RENDER_SIZE_DESKTOP = 1024;
+    const CENTER_STAR_WEBGL_RENDER_SIZE_MOBILE = 640;
+    const CENTER_STAR_WEBGL_RENDER_SIZE_LOW_END_MOBILE = 448;
+    const CENTER_STAR_WEBGL_PIXEL_RATIO_MAX_DESKTOP = 2;
+    const CENTER_STAR_WEBGL_PIXEL_RATIO_MAX_MOBILE = 1.25;
+    const CENTER_STAR_WEBGL_PIXEL_RATIO_MAX_LOW_END_MOBILE = 1;
     const CENTER_STAR_WEBGL_RADIUS = 1.15;
     const CENTER_STAR_WEBGL_CAMERA_FOV = 42;
     const CENTER_STAR_WEBGL_CAMERA_DISTANCE = 8.7;
     const CENTER_STAR_WEBGL_VIEW_HEIGHT = 2 * CENTER_STAR_WEBGL_CAMERA_DISTANCE * Math.tan(CENTER_STAR_WEBGL_CAMERA_FOV * Math.PI / 360);
-    const CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS = (CENTER_STAR_WEBGL_RADIUS / CENTER_STAR_WEBGL_VIEW_HEIGHT) * CENTER_STAR_WEBGL_RENDER_SIZE;
     const CENTER_STAR_BASE_SIZE = 1.15;
     const centerStarWebGL = {
       status: "idle",
@@ -1022,7 +1026,8 @@
       estrella: null,
       glowTexture: null,
       paletteSignature: "",
-      pixelRatio: 1
+      pixelRatio: 1,
+      renderSize: 0
     };
 
     function registerServiceWorker() {
@@ -1045,6 +1050,13 @@
       return isCoarsePointer() || Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 760;
     }
 
+    function isLowEndMobileDevice() {
+      if (!isMobileViewport()) return false;
+      const deviceMemory = typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null;
+      const hardwareConcurrency = typeof navigator.hardwareConcurrency === "number" ? navigator.hardwareConcurrency : null;
+      return (deviceMemory !== null && deviceMemory <= 4) || (hardwareConcurrency !== null && hardwareConcurrency <= 6);
+    }
+
     function getViewportSize() {
       const visualViewport = window.visualViewport;
       return {
@@ -1063,7 +1075,34 @@
 
     function getCanvasPixelRatio() {
       const rawRatio = Math.max(1, window.devicePixelRatio || 1);
-      return clamp(rawRatio, 1, isMobileViewport() ? 2 : 2.5);
+      const maxRatio = isLowEndMobileDevice()
+        ? 1.25
+        : isMobileViewport()
+          ? 1.5
+          : 2.5;
+      return clamp(rawRatio, 1, maxRatio);
+    }
+
+    function getTargetFrameDuration() {
+      if (isLowEndMobileDevice()) return 1000 / 30;
+      if (isMobileViewport()) return 1000 / 45;
+      return 0;
+    }
+
+    function getCenterStarWebGLRenderSize() {
+      if (isLowEndMobileDevice()) return CENTER_STAR_WEBGL_RENDER_SIZE_LOW_END_MOBILE;
+      if (isMobileViewport()) return CENTER_STAR_WEBGL_RENDER_SIZE_MOBILE;
+      return CENTER_STAR_WEBGL_RENDER_SIZE_DESKTOP;
+    }
+
+    function getCenterStarWebGLPixelRatioMax() {
+      if (isLowEndMobileDevice()) return CENTER_STAR_WEBGL_PIXEL_RATIO_MAX_LOW_END_MOBILE;
+      if (isMobileViewport()) return CENTER_STAR_WEBGL_PIXEL_RATIO_MAX_MOBILE;
+      return CENTER_STAR_WEBGL_PIXEL_RATIO_MAX_DESKTOP;
+    }
+
+    function getCenterStarWebGLSourceCoreRadius(renderSize = getCenterStarWebGLRenderSize()) {
+      return (CENTER_STAR_WEBGL_RADIUS / CENTER_STAR_WEBGL_VIEW_HEIGHT) * renderSize;
     }
 
     function isTouchPointerEvent(event) {
@@ -1449,7 +1488,7 @@
       canvas.style.height = height + "px";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
+      ctx.imageSmoothingQuality = isLowEndMobileDevice() ? "medium" : "high";
 
       mapsCanvas.width = Math.max(1, Math.round(width * dpr));
       mapsCanvas.height = Math.max(1, Math.round(height * dpr));
@@ -1457,7 +1496,7 @@
       mapsCanvas.style.height = height + "px";
       mapsCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       mapsCtx.imageSmoothingEnabled = true;
-      mapsCtx.imageSmoothingQuality = "high";
+      mapsCtx.imageSmoothingQuality = isLowEndMobileDevice() ? "medium" : "high";
 
       if (!workspaceLoaded && !workspaceLoading) {
         workspaceLoading = true;
@@ -3692,7 +3731,7 @@
     }
 
     function getCenterStarWebGLPixelRatio() {
-      return clamp(dpr || window.devicePixelRatio || 1, 1, CENTER_STAR_WEBGL_PIXEL_RATIO_MAX);
+      return clamp(dpr || window.devicePixelRatio || 1, 1, getCenterStarWebGLPixelRatioMax());
     }
 
     function syncCenterStarWebGLRendererScale() {
@@ -3700,11 +3739,13 @@
       if (!renderer) return;
 
       const pixelRatio = getCenterStarWebGLPixelRatio();
-      if (centerStarWebGL.pixelRatio === pixelRatio) return;
+      const renderSize = getCenterStarWebGLRenderSize();
+      if (centerStarWebGL.pixelRatio === pixelRatio && centerStarWebGL.renderSize === renderSize) return;
 
       renderer.setPixelRatio(pixelRatio);
-      renderer.setSize(CENTER_STAR_WEBGL_RENDER_SIZE, CENTER_STAR_WEBGL_RENDER_SIZE, false);
+      renderer.setSize(renderSize, renderSize, false);
       centerStarWebGL.pixelRatio = pixelRatio;
+      centerStarWebGL.renderSize = renderSize;
     }
 
     function ensureCenterStarNeutralGlowTexture(THREE, estrella) {
@@ -3732,15 +3773,17 @@
         import("./motor-estrella-offline.js")
       ])
         .then(async ([THREE, starModule]) => {
+          const renderSize = getCenterStarWebGLRenderSize();
+          const lowEndMobile = isLowEndMobileDevice();
           const renderer = new THREE.WebGLRenderer({
             alpha: true,
-            antialias: true,
+            antialias: !lowEndMobile,
             premultipliedAlpha: false,
-            preserveDrawingBuffer: true
+            preserveDrawingBuffer: false
           });
           const pixelRatio = getCenterStarWebGLPixelRatio();
           renderer.setPixelRatio(pixelRatio);
-          renderer.setSize(CENTER_STAR_WEBGL_RENDER_SIZE, CENTER_STAR_WEBGL_RENDER_SIZE, false);
+          renderer.setSize(renderSize, renderSize, false);
           renderer.setClearColor(0x000000, 0);
           renderer.outputColorSpace = THREE.SRGBColorSpace;
           renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -3765,6 +3808,7 @@
           centerStarWebGL.estrella = estrella;
           centerStarWebGL.paletteSignature = "";
           centerStarWebGL.pixelRatio = pixelRatio;
+          centerStarWebGL.renderSize = renderSize;
 
           await estrella.ready;
           ensureCenterStarNeutralGlowTexture(THREE, estrella);
@@ -3978,8 +4022,8 @@
       syncCenterStarWebGLRendererScale();
 
       const starRadius = node.visualRadius * radiusScale * CENTER_STAR_BASE_SIZE * metrics.coreScale * (selected ? 1.92 : 1.82);
-      const renderSize = CENTER_STAR_WEBGL_RENDER_SIZE;
-      const imageSize = (starRadius / CENTER_STAR_WEBGL_SOURCE_CORE_RADIUS) * renderSize;
+      const renderSize = getCenterStarWebGLRenderSize();
+      const imageSize = (starRadius / getCenterStarWebGLSourceCoreRadius(renderSize)) * renderSize;
 
       drawCenterStarExternalGlow(x, y, starRadius, star, metrics, selected, time);
 
@@ -5258,6 +5302,13 @@
       renderFrameId = null;
       if (renderPaused) return;
 
+      const targetFrameDuration = getTargetFrameDuration();
+      if (targetFrameDuration > 0 && lastRenderTimestamp > 0 && (time - lastRenderTimestamp) < targetFrameDuration) {
+        renderFrameId = requestAnimationFrame(render);
+        return;
+      }
+      lastRenderTimestamp = time;
+
       ctx.clearRect(0, 0, width, height);
       drawBackground(time);
       updateNodes();
@@ -5280,11 +5331,13 @@
     function startRenderLoop() {
       if (renderFrameId !== null) return;
       renderPaused = false;
+      lastRenderTimestamp = 0;
       renderFrameId = requestAnimationFrame(render);
     }
 
     function stopRenderLoop() {
       renderPaused = true;
+      lastRenderTimestamp = 0;
       if (renderFrameId !== null) {
         cancelAnimationFrame(renderFrameId);
         renderFrameId = null;
