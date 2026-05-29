@@ -2,7 +2,7 @@
   "name": "Contextus",
   "short_name": "Contextus",
   "description": "Mapa mental organico local-first.",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#060b10",

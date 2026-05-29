@@ -1,7 +1,9 @@
-const CACHE_NAME = "contextus-app-shell-v2";
+const CACHE_NAME = "contextus-app-shell-v3";
+const APP_ENTRY = "./";
+const INDEX_ENTRY = "./index.html";
 const APP_SHELL = [
-  "./",
-  "./index.html",
+  APP_ENTRY,
+  INDEX_ENTRY,
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
@@ -12,11 +14,70 @@ const APP_SHELL = [
   "./vendor/three/three.core.js"
 ];
 
+function toAbsoluteUrl(url) {
+  return new URL(url, self.location.href).href;
+}
+
+async function getCachedAppShell() {
+  const cache = await caches.open(CACHE_NAME);
+  const fallbackUrls = [APP_ENTRY, INDEX_ENTRY].map(toAbsoluteUrl);
+
+  for (const url of fallbackUrls) {
+    const cached = await cache.match(url);
+    if (cached) return cached;
+  }
+
+  return new Response(
+    "<!doctype html><title>Contextus offline</title><p>Contextus no terminó de guardarse para uso sin conexión. Abre la aplicación una vez con internet y espera unos segundos antes de desconectarte.</p>",
+    {
+      status: 503,
+      headers: { "Content-Type": "text/html; charset=utf-8" }
+    }
+  );
+}
+
+async function cacheNavigation(request, response) {
+  if (!response || response.status !== 200 || response.type === "opaque") return;
+
+  const cache = await caches.open(CACHE_NAME);
+  await Promise.all([
+    cache.put(request, response.clone()),
+    cache.put(toAbsoluteUrl(APP_ENTRY), response.clone()),
+    cache.put(toAbsoluteUrl(INDEX_ENTRY), response.clone())
+  ]);
+}
+
+async function handleNavigation(request, event) {
+  try {
+    const response = await fetch(request);
+    event.waitUntil(cacheNavigation(request, response.clone()));
+    return response;
+  } catch (error) {
+    return getCachedAppShell();
+  }
+}
+
+async function handleAsset(request) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+
+  try {
+    const response = await fetch(request);
+    if (response && response.status === 200 && response.type !== "opaque") {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch (error) {
+    return Response.error();
+  }
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
+      .then((cache) => cache.addAll(APP_SHELL.map(toAbsoluteUrl)))
       .then(() => self.skipWaiting())
   );
 });
@@ -41,47 +102,9 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
 
   if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response && response.status === 200) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request.url, copy);
-              cache.put("./index.html", copy);
-            });
-          }
-          return response;
-        })
-        .catch(() => {
-          return caches.match("./index.html")
-            .then((cached) => {
-              if (cached) return cached;
-              return caches.match("/index.html")
-                .then((cached2) => cached2 || caches.match("/"));
-            });
-        })
-    );
+    event.respondWith(handleNavigation(request, event));
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-
-      return fetch(request)
-        .then((response) => {
-          if (!response || response.status !== 200 || response.type === "opaque") {
-            return response;
-          }
-
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          return response;
-        })
-        .catch(() => {
-          return caches.match("./index.html");
-        });
-    })
-  );
+  event.respondWith(handleAsset(request));
 });
