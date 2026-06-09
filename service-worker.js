@@ -1,7 +1,7 @@
-const CACHE_NAME = "contextus-app-shell-v9-first-critical";
+const CACHE_NAME = "contextus-app-shell-v10-visibility-stability";
 const RELEASE = {
-  version: "2026.06.09-first-critical",
-  priority: "critical"
+  version: "2026.06.09-visibility-stability",
+  priority: "normal"
 };
 const APP_ENTRY = "./";
 const INDEX_ENTRY = "./index.html";
