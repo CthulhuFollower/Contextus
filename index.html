@@ -388,6 +388,107 @@
       border-color: rgba(236, 182, 191, 0.28);
     }
 
+    .critical-anomaly {
+      position: fixed;
+      z-index: 200;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: auto;
+      background: transparent;
+    }
+
+    .critical-anomaly[hidden] {
+      display: none;
+    }
+
+    .critical-anomaly.is-passive {
+      pointer-events: none;
+    }
+
+    .critical-anomaly .anomaly-webgl-layer {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .critical-anomaly-traveler {
+      position: absolute;
+      z-index: 2;
+      left: calc(24px + env(safe-area-inset-left));
+      bottom: calc(24px + env(safe-area-inset-bottom));
+      width: min(390px, calc(100vw - 48px));
+      padding: 0 14px 14px;
+      border: 1px solid rgba(218, 235, 246, 0.24);
+      border-radius: 8px;
+      background: rgba(5, 10, 13, 0.9);
+      color: rgba(244, 249, 252, 0.94);
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.5;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
+      backdrop-filter: blur(16px);
+      pointer-events: auto;
+    }
+
+    .critical-anomaly-traveler[hidden] {
+      display: none;
+    }
+
+    .critical-anomaly-handle {
+      margin: 0 -14px;
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(218, 235, 246, 0.14);
+      color: rgba(158, 232, 255, 0.84);
+      cursor: move;
+      user-select: none;
+      touch-action: none;
+    }
+
+    .critical-anomaly-message {
+      margin: 14px 0;
+    }
+
+    .critical-anomaly-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .critical-anomaly-actions[hidden] {
+      display: none;
+    }
+
+    .critical-anomaly-btn {
+      min-width: 0;
+      min-height: 42px;
+      padding: 9px 11px;
+      border: 1px solid rgba(218, 235, 246, 0.2);
+      border-radius: 6px;
+      background: rgba(14, 24, 31, 0.86);
+      color: rgba(244, 249, 252, 0.94);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .critical-anomaly-btn:hover:not(:disabled) {
+      background: rgba(22, 35, 44, 0.94);
+      border-color: rgba(218, 235, 246, 0.32);
+    }
+
+    .critical-anomaly-btn:disabled {
+      cursor: wait;
+      opacity: 0.55;
+    }
+
+    .critical-anomaly-btn.is-primary {
+      border-color: rgba(248, 195, 107, 0.45);
+      color: rgba(255, 226, 174, 0.96);
+    }
+
     .editor {
       position: absolute;
       z-index: 60;
@@ -608,6 +709,16 @@
       .note-card {
         display: none !important;
       }
+
+      .critical-anomaly-traveler {
+        left: calc(16px + env(safe-area-inset-left));
+        bottom: calc(16px + env(safe-area-inset-bottom));
+        width: calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right));
+      }
+
+      .critical-anomaly-actions {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -658,7 +769,19 @@
       <div id="noteCardTitle" class="note-card-title"></div>
       <div id="noteCardBody" class="note-card-body"></div>
     </div>
+
   </div>
+
+  <section id="criticalAnomaly" class="critical-anomaly" hidden aria-label="Anomalia critica">
+    <div id="criticalAnomalyTraveler" class="critical-anomaly-traveler" hidden aria-live="polite">
+      <div id="criticalAnomalyHandle" class="critical-anomaly-handle">Viajero</div>
+      <p id="criticalAnomalyMessage" class="critical-anomaly-message"></p>
+      <div id="criticalAnomalyActions" class="critical-anomaly-actions" hidden>
+        <button id="postponeCriticalUpdateBtn" class="critical-anomaly-btn" type="button">Posponer 1 minuto</button>
+        <button id="repairCriticalUpdateBtn" class="critical-anomaly-btn is-primary" type="button">Reparar inmediatamente</button>
+      </div>
+    </div>
+  </section>
 
   <script>
     const STORAGE_KEY = "sobrio-tree-state-v3";
@@ -707,6 +830,13 @@
     const noteCard = document.getElementById("noteCard");
     const noteCardTitle = document.getElementById("noteCardTitle");
     const noteCardBody = document.getElementById("noteCardBody");
+    const criticalAnomalyHost = document.getElementById("criticalAnomaly");
+    const criticalAnomalyTraveler = document.getElementById("criticalAnomalyTraveler");
+    const criticalAnomalyHandle = document.getElementById("criticalAnomalyHandle");
+    const criticalAnomalyMessage = document.getElementById("criticalAnomalyMessage");
+    const criticalAnomalyActions = document.getElementById("criticalAnomalyActions");
+    const postponeCriticalUpdateBtn = document.getElementById("postponeCriticalUpdateBtn");
+    const repairCriticalUpdateBtn = document.getElementById("repairCriticalUpdateBtn");
 
     let width = 0;
     let height = 0;
@@ -740,6 +870,24 @@
     let localDbPromise = null;
     let persistenceChain = Promise.resolve();
     let localRevision = 0;
+    let pendingServiceWorker = null;
+    let pendingServiceWorkerRelease = null;
+    let shouldReloadForServiceWorkerUpdate = false;
+    let criticalAnomalyModulePromise = null;
+    let criticalAnomaly = null;
+    let criticalAnomalyStates = null;
+    let criticalAnomalyFrameId = null;
+    let criticalAnomalyDeadline = 0;
+    let criticalAnomalyActionPending = false;
+    let criticalAnomalySceneFrozen = false;
+    let criticalAnomalyTravelerVisible = false;
+    let criticalAnomalySavePromise = null;
+    let criticalAnomalyOperationToken = 0;
+    let criticalAnomalyFallbackMode = false;
+    let criticalTravelerDragging = false;
+    let criticalTravelerPointerId = null;
+    let criticalTravelerOffsetX = 0;
+    let criticalTravelerOffsetY = 0;
     let mapsOverlayOpen = false;
     let constellationItems = [];
     const constellationSummaryCache = new Map();
@@ -1030,12 +1178,432 @@
       renderSize: 0
     };
 
+    function getCriticalAnomalySourceCanvas() {
+      return mapsOverlayOpen ? mapsCanvas : canvas;
+    }
+
+    function setCriticalAnomalySceneFrozen(frozen) {
+      criticalAnomalySceneFrozen = frozen;
+      app.inert = frozen;
+      criticalAnomalyHost.classList.toggle("is-passive", !frozen);
+
+      if (frozen) {
+        stopRenderLoop();
+        app.style.cursor = "default";
+        return;
+      }
+
+      app.style.cursor = mapsOverlayOpen ? "default" : "grab";
+      if (!document.hidden) startRenderLoop();
+    }
+
+    function setCriticalAnomalyTraveler(message, { actions = false } = {}) {
+      if (criticalAnomalyMessage.textContent !== message) {
+        criticalAnomalyMessage.textContent = message;
+      }
+      criticalAnomalyActions.hidden = !actions;
+      criticalAnomalyTraveler.hidden = false;
+      criticalAnomalyTravelerVisible = true;
+    }
+
+    function hideCriticalAnomalyTraveler() {
+      criticalAnomalyTraveler.hidden = true;
+      criticalAnomalyActions.hidden = true;
+      criticalAnomalyTravelerVisible = false;
+    }
+
+    function setCriticalAnomalyActionsBusy(busy) {
+      postponeCriticalUpdateBtn.disabled = busy;
+      repairCriticalUpdateBtn.disabled = busy;
+    }
+
+    function loadCriticalAnomaly() {
+      if (criticalAnomaly) return Promise.resolve(criticalAnomaly);
+      if (criticalAnomalyModulePromise) return criticalAnomalyModulePromise;
+
+      criticalAnomalyModulePromise = import("./anomaly/black-hole-object.js")
+        .then((module) => {
+          criticalAnomalyStates = module.BLACK_HOLE_STATES;
+          criticalAnomaly = module.createBlackHole({
+            hostElement: criticalAnomalyHost,
+            lutUrl: "./anomaly/schwarzschild-lut-v1.bin",
+            quality: "auto",
+            onStateChange: handleCriticalAnomalyStateChange,
+            onContainmentComplete: handleCriticalAnomalyContainmentComplete,
+            onRepairComplete: handleCriticalAnomalyRepairComplete
+          });
+          return criticalAnomaly;
+        })
+        .catch((error) => {
+          criticalAnomalyModulePromise = null;
+          throw error;
+        });
+
+      return criticalAnomalyModulePromise;
+    }
+
+    function prepareCriticalAnomaly() {
+      return loadCriticalAnomaly().then((anomaly) => anomaly.prepare({
+        sourceCanvas: getCriticalAnomalySourceCanvas(),
+        viewport: getViewportSize(),
+        quality: "auto",
+        hostElement: criticalAnomalyHost
+      }));
+    }
+
+    function handleCriticalAnomalyStateChange(state, status) {
+      if (!criticalAnomalyStates) return;
+
+      if (state === criticalAnomalyStates.FORMED) {
+        setCriticalAnomalyTraveler(
+          "Es critica. Puedo repararla ahora o contenerla un minuto mientras terminas.",
+          { actions: true }
+        );
+        setCriticalAnomalyActionsBusy(false);
+      } else if (state === criticalAnomalyStates.REPAIRING) {
+        setCriticalAnomalyTraveler("Necesito espacio. Me encargo de ella ahora.", { actions: false });
+        setCriticalAnomalyActionsBusy(true);
+      } else if (state === criticalAnomalyStates.FAILED && status.fallback) {
+        console.warn("La anomalia critica usara su respaldo visual.");
+      }
+    }
+
+    function handleCriticalAnomalyContainmentComplete() {
+      setCriticalAnomalySceneFrozen(false);
+      updateCriticalAnomalyPostponement();
+    }
+
+    async function handleCriticalAnomalyRepairComplete() {
+      if (criticalAnomalySavePromise) {
+        await criticalAnomalySavePromise;
+      }
+      activatePendingServiceWorker();
+    }
+
+    function updateCriticalAnomalyPostponement() {
+      if (!criticalAnomalyDeadline) return;
+
+      const remaining = criticalAnomalyDeadline - Date.now();
+      if (remaining <= 0) {
+        forceCriticalAnomalyRepair();
+        return;
+      }
+
+      const seconds = Math.max(1, Math.ceil(remaining / 1000));
+      setCriticalAnomalyTraveler(`La contencion resistira ${seconds} segundos.`, { actions: false });
+    }
+
+    function updateCriticalAnomalyTimeline() {
+      if (
+        criticalAnomaly &&
+        criticalAnomalyStates &&
+        criticalAnomaly.state === criticalAnomalyStates.FORMING &&
+        criticalAnomaly.getStatus().formationElapsed >= 3500 &&
+        !criticalAnomalyTravelerVisible
+      ) {
+        setCriticalAnomalyTraveler("Espera. Estoy examinando esta anomalia.", { actions: false });
+      }
+
+      if (
+        criticalAnomalyDeadline &&
+        (
+          criticalAnomalyFallbackMode ||
+          criticalAnomaly?.state === criticalAnomalyStates?.POSTPONED
+        )
+      ) {
+        updateCriticalAnomalyPostponement();
+      }
+    }
+
+    function runCriticalAnomalyFrame(time) {
+      criticalAnomalyFrameId = null;
+      criticalAnomaly?.update(time);
+      criticalAnomaly?.render();
+      updateCriticalAnomalyTimeline();
+
+      if (
+        criticalAnomalyDeadline ||
+        (
+          criticalAnomaly &&
+          criticalAnomalyStates &&
+          criticalAnomaly.state !== criticalAnomalyStates.IDLE
+        )
+      ) {
+        criticalAnomalyFrameId = requestAnimationFrame(runCriticalAnomalyFrame);
+      }
+    }
+
+    function startCriticalAnomalyLoop() {
+      if (criticalAnomalyFrameId !== null) return;
+      criticalAnomalyFrameId = requestAnimationFrame(runCriticalAnomalyFrame);
+    }
+
+    async function showCriticalCycleSignal(worker, release) {
+      if (!worker) return;
+
+      pendingServiceWorker = worker;
+      pendingServiceWorkerRelease = release || null;
+
+      if (
+        criticalAnomalyActionPending ||
+        criticalAnomalyDeadline ||
+        !criticalAnomalyHost.hidden
+      ) {
+        return;
+      }
+
+      const token = ++criticalAnomalyOperationToken;
+      criticalAnomalyActionPending = true;
+      criticalAnomalyFallbackMode = false;
+      criticalAnomalyHost.hidden = false;
+      hideCriticalAnomalyTraveler();
+      setCriticalAnomalyActionsBusy(true);
+      setCriticalAnomalySceneFrozen(true);
+
+      try {
+        await prepareCriticalAnomaly();
+        if (token !== criticalAnomalyOperationToken) return;
+        criticalAnomaly.startFormation();
+        startCriticalAnomalyLoop();
+      } catch (error) {
+        console.error("No se pudo formar la anomalia critica:", error);
+        criticalAnomalyFallbackMode = true;
+        setCriticalAnomalyTraveler(
+          "Es critica. Puedo repararla ahora o contenerla un minuto mientras terminas.",
+          { actions: true }
+        );
+        setCriticalAnomalyActionsBusy(false);
+      } finally {
+        criticalAnomalyActionPending = false;
+      }
+    }
+
+    function postponeCriticalUpdate() {
+      if (
+        criticalAnomalyActionPending ||
+        criticalAnomalyDeadline ||
+        !pendingServiceWorker
+      ) {
+        return;
+      }
+
+      if (
+        criticalAnomaly &&
+        criticalAnomalyStates &&
+        criticalAnomaly.state !== criticalAnomalyStates.FORMED
+      ) {
+        return;
+      }
+
+      criticalAnomalyDeadline = Date.now() + 60_000;
+      setCriticalAnomalyTraveler(
+        "La contendre temporalmente. Termina lo que estabas haciendo.",
+        { actions: false }
+      );
+      setCriticalAnomalyActionsBusy(true);
+
+      if (criticalAnomalyFallbackMode) {
+        setCriticalAnomalySceneFrozen(false);
+        startCriticalAnomalyLoop();
+        return;
+      }
+
+      criticalAnomaly.startContainment();
+      startCriticalAnomalyLoop();
+    }
+
+    async function beginCriticalAnomalyRepair({ prepareAgain = false } = {}) {
+      if (criticalAnomalyActionPending || !pendingServiceWorker) return;
+
+      criticalAnomalyActionPending = true;
+      criticalAnomalyDeadline = 0;
+      criticalAnomalyHost.hidden = false;
+      setCriticalAnomalySceneFrozen(true);
+      setCriticalAnomalyTraveler("Necesito espacio. Me encargo de ella ahora.", { actions: false });
+      setCriticalAnomalyActionsBusy(true);
+
+      closeEditor(true);
+      flushPendingSave();
+      criticalAnomalySavePromise = workspaceLoaded
+        ? saveState(false).catch((error) => {
+            console.warn("No se pudo guardar antes de renovar el ciclo:", error);
+          })
+        : Promise.resolve();
+
+      try {
+        if (criticalAnomalyFallbackMode) {
+          await criticalAnomalySavePromise;
+          activatePendingServiceWorker();
+          return;
+        }
+
+        if (prepareAgain) {
+          await prepareCriticalAnomaly();
+        }
+
+        if (!criticalAnomaly.requestRepair()) {
+          await criticalAnomalySavePromise;
+          activatePendingServiceWorker();
+          return;
+        }
+
+        startCriticalAnomalyLoop();
+      } catch (error) {
+        console.error("No se pudo completar la reparacion critica:", error);
+        await criticalAnomalySavePromise;
+        activatePendingServiceWorker();
+      }
+    }
+
+    function repairCriticalUpdate() {
+      if (
+        criticalAnomaly &&
+        criticalAnomalyStates &&
+        criticalAnomaly.state !== criticalAnomalyStates.FORMED
+      ) {
+        return;
+      }
+      beginCriticalAnomalyRepair();
+    }
+
+    function forceCriticalAnomalyRepair() {
+      if (criticalAnomalyActionPending || !criticalAnomalyDeadline) return;
+      beginCriticalAnomalyRepair({ prepareAgain: !criticalAnomalyFallbackMode });
+    }
+
+    function activatePendingServiceWorker() {
+      if (!pendingServiceWorker) return;
+
+      shouldReloadForServiceWorkerUpdate = true;
+      setCriticalAnomalyTraveler("La anomalia cede. El ciclo comienza de nuevo.", { actions: false });
+
+      try {
+        pendingServiceWorker.postMessage({ type: "SKIP_WAITING" });
+      } catch (error) {
+        console.warn("No se pudo activar la renovacion preparada:", error);
+      }
+
+      window.setTimeout(() => {
+        if (shouldReloadForServiceWorkerUpdate) {
+          window.location.reload();
+        }
+      }, 4000);
+    }
+
+    function beginCriticalTravelerDrag(event) {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const rect = criticalAnomalyTraveler.getBoundingClientRect();
+      criticalTravelerDragging = true;
+      criticalTravelerPointerId = event.pointerId;
+      criticalTravelerOffsetX = event.clientX - rect.left;
+      criticalTravelerOffsetY = event.clientY - rect.top;
+      criticalAnomalyHandle.setPointerCapture(event.pointerId);
+    }
+
+    function moveCriticalTravelerDrag(event) {
+      if (!criticalTravelerDragging || event.pointerId !== criticalTravelerPointerId) return;
+      event.preventDefault();
+      const rect = criticalAnomalyTraveler.getBoundingClientRect();
+      const left = clamp(event.clientX - criticalTravelerOffsetX, 8, window.innerWidth - rect.width - 8);
+      const top = clamp(event.clientY - criticalTravelerOffsetY, 8, window.innerHeight - rect.height - 8);
+      criticalAnomalyTraveler.style.left = `${left}px`;
+      criticalAnomalyTraveler.style.top = `${top}px`;
+      criticalAnomalyTraveler.style.right = "auto";
+      criticalAnomalyTraveler.style.bottom = "auto";
+    }
+
+    function endCriticalTravelerDrag(event) {
+      if (!criticalTravelerDragging || event.pointerId !== criticalTravelerPointerId) return;
+      criticalTravelerDragging = false;
+      criticalTravelerPointerId = null;
+      if (criticalAnomalyHandle.hasPointerCapture(event.pointerId)) {
+        criticalAnomalyHandle.releasePointerCapture(event.pointerId);
+      }
+    }
+
+    function getServiceWorkerRelease(worker) {
+      return new Promise((resolve) => {
+        if (!worker) {
+          resolve({ priority: "normal" });
+          return;
+        }
+
+        const channel = new MessageChannel();
+        const timeout = window.setTimeout(() => {
+          channel.port1.onmessage = null;
+          resolve({ priority: "normal" });
+        }, 1200);
+
+        channel.port1.onmessage = (event) => {
+          window.clearTimeout(timeout);
+          const release = event.data && event.data.release ? event.data.release : {};
+          resolve({
+            version: typeof release.version === "string" ? release.version : "",
+            priority: release.priority === "critical" ? "critical" : "normal"
+          });
+        };
+
+        try {
+          worker.postMessage({ type: "GET_RELEASE" }, [channel.port2]);
+        } catch (error) {
+          window.clearTimeout(timeout);
+          resolve({ priority: "normal" });
+        }
+      });
+    }
+
+    async function handleServiceWorkerCandidate(worker) {
+      if (!worker || !navigator.serviceWorker.controller) return;
+
+      const release = await getServiceWorkerRelease(worker);
+      if (release.priority !== "critical") return;
+
+      showCriticalCycleSignal(worker, release);
+    }
+
+    function requestServiceWorkerUpdate(registration) {
+      if (!registration || !navigator.onLine) return;
+      registration.update().catch((error) => {
+        console.warn("No se pudo buscar una actualizacion:", error);
+      });
+    }
+
+    function watchServiceWorkerUpdates(registration) {
+      if (registration.waiting && navigator.serviceWorker.controller) {
+        handleServiceWorkerCandidate(registration.waiting);
+      }
+
+      registration.addEventListener("updatefound", () => {
+        const worker = registration.installing;
+        if (!worker) return;
+
+        worker.addEventListener("statechange", () => {
+          if (worker.state === "installed" && navigator.serviceWorker.controller) {
+            handleServiceWorkerCandidate(worker);
+          }
+        });
+      });
+    }
+
     function registerServiceWorker() {
       if (!("serviceWorker" in navigator)) return;
 
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (!shouldReloadForServiceWorkerUpdate) return;
+        shouldReloadForServiceWorkerUpdate = false;
+        window.location.reload();
+      });
+
       window.addEventListener("load", () => {
         navigator.serviceWorker
-          .register("./service-worker.js")
+          .register("./service-worker.js", { updateViaCache: "none" })
+          .then((registration) => {
+            watchServiceWorkerUpdates(registration);
+            requestServiceWorkerUpdate(registration);
+
+            window.addEventListener("online", () => requestServiceWorkerUpdate(registration));
+          })
           .catch((error) => {
             console.warn("No se pudo registrar el service worker:", error);
           });
@@ -1497,6 +2065,7 @@
       mapsCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       mapsCtx.imageSmoothingEnabled = true;
       mapsCtx.imageSmoothingQuality = isLowEndMobileDevice() ? "medium" : "high";
+      criticalAnomaly?.resize(viewport);
 
       if (!workspaceLoaded && !workspaceLoading) {
         workspaceLoading = true;
@@ -6417,6 +6986,13 @@
       closeEditor(true);
     });
 
+    postponeCriticalUpdateBtn.addEventListener("click", postponeCriticalUpdate);
+    repairCriticalUpdateBtn.addEventListener("click", repairCriticalUpdate);
+    criticalAnomalyHandle.addEventListener("pointerdown", beginCriticalTravelerDrag);
+    criticalAnomalyHandle.addEventListener("pointermove", moveCriticalTravelerDrag);
+    criticalAnomalyHandle.addEventListener("pointerup", endCriticalTravelerDrag);
+    criticalAnomalyHandle.addEventListener("pointercancel", endCriticalTravelerDrag);
+
     nodeInput.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
@@ -6468,7 +7044,11 @@
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
         resize();
-        startRenderLoop();
+        if (criticalAnomalyDeadline && Date.now() >= criticalAnomalyDeadline) {
+          forceCriticalAnomalyRepair();
+        }
+        if (criticalAnomalySceneFrozen) stopRenderLoop();
+        else startRenderLoop();
         return;
       }
 

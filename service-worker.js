@@ -1,4 +1,8 @@
-const CACHE_NAME = "contextus-app-shell-v3";
+const CACHE_NAME = "contextus-app-shell-v8-anomaly-bootstrap";
+const RELEASE = {
+  version: "2026.06.09-anomaly-bootstrap",
+  priority: "normal"
+};
 const APP_ENTRY = "./";
 const INDEX_ENTRY = "./index.html";
 const APP_SHELL = [
@@ -10,6 +14,8 @@ const APP_SHELL = [
   "./icon-512.png",
   "./apple-touch-icon.png",
   "./motor-estrella-offline.js",
+  "./anomaly/black-hole-object.js",
+  "./anomaly/schwarzschild-lut-v1.bin",
   "./vendor/three/three.module.js",
   "./vendor/three/three.core.js"
 ];
@@ -78,7 +84,6 @@ self.addEventListener("install", (event) => {
     caches
       .open(CACHE_NAME)
       .then((cache) => cache.addAll(APP_SHELL.map(toAbsoluteUrl)))
-      .then(() => self.skipWaiting())
   );
 });
 
@@ -107,4 +112,17 @@ self.addEventListener("fetch", (event) => {
   }
 
   event.respondWith(handleAsset(request));
+});
+
+self.addEventListener("message", (event) => {
+  const message = event.data || {};
+
+  if (message.type === "GET_RELEASE") {
+    event.ports?.[0]?.postMessage({ release: RELEASE });
+    return;
+  }
+
+  if (message.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });

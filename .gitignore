@@ -1,0 +1,5 @@
+# Local development environments
+/.venv/
+
+# Isolated visual and interaction laboratories
+/experiments/
