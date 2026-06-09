@@ -1,7 +1,7 @@
-const CACHE_NAME = "contextus-app-shell-v8-anomaly-bootstrap";
+const CACHE_NAME = "contextus-app-shell-v9-first-critical";
 const RELEASE = {
-  version: "2026.06.09-anomaly-bootstrap",
-  priority: "normal"
+  version: "2026.06.09-first-critical",
+  priority: "critical"
 };
 const APP_ENTRY = "./";
 const INDEX_ENTRY = "./index.html";
