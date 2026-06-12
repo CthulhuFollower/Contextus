@@ -1,7 +1,7 @@
-const CACHE_NAME = "contextus-app-shell-v10-visibility-stability";
+const CACHE_NAME = "contextus-app-shell-v29-perf-010b1-link-segment-culling";
 const RELEASE = {
-  version: "2026.06.09-visibility-stability",
-  priority: "normal"
+  version: "2026.06.11-local-sync-perf-010b1-r1",
+  priority: "critical"
 };
 const APP_ENTRY = "./";
 const INDEX_ENTRY = "./index.html";
@@ -14,6 +14,16 @@ const APP_SHELL = [
   "./icon-512.png",
   "./apple-touch-icon.png",
   "./motor-estrella-offline.js",
+  "./runtime/node-index.js",
+  "./runtime/batch-delete.js",
+  "./runtime/transaction-persistence.js",
+  "./runtime/startup-profiler.js",
+  "./runtime/render-culling.js",
+  "./sync/workspace-model.js",
+  "./sync/device-patches.js",
+  "./sync/merge-engine.js",
+  "./sync/local-sync-engine.js",
+  "./sync/indexeddb-store.js",
   "./anomaly/black-hole-object.js",
   "./anomaly/schwarzschild-lut-v1.bin",
   "./vendor/three/three.module.js",

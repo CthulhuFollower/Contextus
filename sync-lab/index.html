@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contextus - Laboratorio de sincronizacion</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #e9f4f3;
+      --muted: #8ba6a5;
+      --line: rgba(171, 229, 222, 0.18);
+      --glass: rgba(11, 25, 31, 0.82);
+      --cyan: #77e1d6;
+      --amber: #f7c26d;
+      --danger: #ef887d;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font: 15px/1.5 Georgia, "Times New Roman", serif;
+      background:
+        radial-gradient(circle at 16% 18%, rgba(49, 151, 161, 0.2), transparent 32rem),
+        radial-gradient(circle at 85% 75%, rgba(169, 104, 54, 0.17), transparent 35rem),
+        #071015;
+    }
+
+    header, main {
+      width: min(1440px, calc(100% - 32px));
+      margin-inline: auto;
+    }
+
+    header { padding: 34px 0 18px; }
+    h1, h2 { margin: 0; font-weight: 400; letter-spacing: 0.04em; }
+    header p { max-width: 720px; margin: 8px 0 0; color: var(--muted); }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      background: var(--glass);
+      backdrop-filter: blur(16px);
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 13px;
+      color: var(--ink);
+      background: rgba(122, 211, 204, 0.07);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--cyan); }
+    button[data-kind="danger"] { color: var(--danger); }
+    button[data-kind="sync"] { color: var(--amber); }
+
+    .status {
+      min-height: 24px;
+      margin: 10px 2px 16px;
+      color: var(--cyan);
+    }
+
+    .devices {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      padding-bottom: 32px;
+    }
+
+    article {
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: var(--glass);
+    }
+
+    article h2 {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      color: var(--amber);
+    }
+
+    pre {
+      min-height: 520px;
+      max-height: 72vh;
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      color: #b9d8d5;
+      font: 12px/1.55 Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 850px) {
+      .devices { grid-template-columns: 1fr; }
+      pre { min-height: 360px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Laboratorio de sincronizacion local</h1>
+    <p>Dos dispositivos aislados, sin red. Las acciones divergen sus universos y el intercambio manual permite observar operaciones, conflictos, tombstones y recuperaciones.</p>
+  </header>
+  <main>
+    <section class="controls" aria-label="Acciones del laboratorio">
+      <button data-action="reset">Recrear universo</button>
+      <button data-action="edit-a">Editar titulo en A</button>
+      <button data-action="edit-b">Editar titulo en B</button>
+      <button data-action="move-a">Mover nodo en A</button>
+      <button data-action="move-b">Mover nodo en B</button>
+      <button data-action="delete-a" data-kind="danger">Borrar nodo en A</button>
+      <button data-action="note-b">Editar nota en B</button>
+      <button data-action="exchange" data-kind="sync">Intercambiar bundles</button>
+      <button data-action="resolve">Resolver primer conflicto</button>
+      <button data-action="compact">Compactar ambos</button>
+      <button data-action="restart">Reiniciar motores</button>
+      <button data-action="clear" data-kind="danger">Limpiar laboratorio</button>
+    </section>
+    <p id="status" class="status" aria-live="polite"></p>
+    <section class="devices">
+      <article>
+        <h2>Dispositivo A</h2>
+        <pre id="deviceA"></pre>
+      </article>
+      <article>
+        <h2>Dispositivo B</h2>
+        <pre id="deviceB"></pre>
+      </article>
+    </section>
+  </main>
+  <script type="module" src="./lab.js"></script>
+</body>
+</html>

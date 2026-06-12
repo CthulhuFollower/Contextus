@@ -147,6 +147,8 @@ Contextus está en desarrollo activo. La base funcional ya incluye mapas, nodos,
 - Sincronización opcional entre dispositivos.
 - Optimización adicional para dispositivos de bajo rendimiento.
 
+La base local de sincronización ya puede evaluarse sin red desde `sync-lab/`. El motor separa el universo compartido del estado privado de cada dispositivo, mezcla operaciones y conserva conflictos o recuperaciones sin conectarse a servicios externos.
+
 Como proyecto de portafolio, demuestra trabajo con interfaces interactivas, renderizado en canvas, WebGL, PWA, persistencia en navegador y diseño de experiencias frontend no convencionales.
 
 ## Demo

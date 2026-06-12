@@ -783,26 +783,76 @@
     </div>
   </section>
 
-  <script>
+  <script type="module">
+    import { createIndexedDbSyncStore } from "./sync/indexeddb-store.js";
+    import { LocalSyncEngine } from "./sync/local-sync-engine.js";
+    import {
+      getChildrenByParentId,
+      indexNodeByParentId,
+      indexNodeById,
+      rebuildChildrenByParentId,
+      rebuildNodesById
+    } from "./runtime/node-index.js";
+    import { deleteTreeCollectionsInPlace } from "./runtime/batch-delete.js";
+    import {
+      createFastSharedChange,
+      getTransactionPersistenceContract,
+      requiresWorkspaceCapture
+    } from "./runtime/transaction-persistence.js";
+    import {
+      captureDeviceSnapshot,
+      ensureRuntimeSyncIds,
+      materializeWorkspace,
+      sharedMapFromRuntime,
+      sharedNodeFromRuntime,
+      createSyncId
+    } from "./sync/workspace-model.js";
+    import { filterChangedDevicePatches } from "./sync/device-patches.js";
+    import {
+      createStartupProfiler,
+      measureStartupAsync,
+      measureStartupSync
+    } from "./runtime/startup-profiler.js";
+    import { collectVisibleRenderItems } from "./runtime/render-culling.js";
+
+    const startupSearchParams = new URLSearchParams(location.search);
+    const startupProfilingEnabled = startupSearchParams.get("perfStartup") === "1";
+    const renderCullingEnabled = startupSearchParams.get("perfRenderCulling") !== "0";
+    const linkSegmentCullingEnabled =
+      renderCullingEnabled && startupSearchParams.get("perfLinkSegmentCulling") !== "0";
+    const centerStarWebGLDisabled = startupSearchParams.get("perfDisableStarWebGL") === "1";
+    const linkRenderDiagnosticsEnabled =
+      startupProfilingEnabled && startupSearchParams.get("perfLinkDiagnostics") === "1";
+    const linkCostDiagnosticsEnabled =
+      startupProfilingEnabled && startupSearchParams.get("perfLinkCostDiagnostics") === "1";
+    const linkRenderDiagnosticsModule = linkRenderDiagnosticsEnabled
+      ? await import("./runtime/link-render-diagnostics.js")
+      : null;
+    const linkCostDiagnosticsModule = linkCostDiagnosticsEnabled
+      ? await import("./runtime/link-cost-diagnostics.js")
+      : null;
+    const linkCostDiagnosticsMode = startupSearchParams.get("perfLinkCostMode") || "current";
+    const startupProfiler = createStartupProfiler({
+      enabled: startupProfilingEnabled,
+      startedAt: 0,
+      runId: startupSearchParams.get("perfStartupRun"),
+      context: {
+        dbName: startupSearchParams.get("perfStartupDb") || null,
+        cacheState: startupSearchParams.get("perfStartupCache") || null,
+        renderCullingMode: renderCullingEnabled ? "culled" : "baseline",
+        linkCullingMode: linkSegmentCullingEnabled ? "segment" : "bounding-box",
+        centerStarRenderer: centerStarWebGLDisabled ? "canvas-fallback" : "webgl",
+        linkRenderDiagnostics: linkRenderDiagnosticsEnabled,
+        linkCostDiagnostics: linkCostDiagnosticsEnabled ? linkCostDiagnosticsMode : false,
+        navigationType: performance.getEntriesByType("navigation")[0]?.type || null
+      }
+    });
+    startupProfiler.mark("app.moduleReady");
+
     const STORAGE_KEY = "sobrio-tree-state-v3";
     const LEGACY_MULTI_STORAGE_KEY = "sobrio-tree-state-v2";
     const LEGACY_STORAGE_KEY = "sobrio-tree-state-v1";
     const STORAGE_VERSION = 7;
-    const LOCAL_DB_NAME = "contextus-local-first";
-    const LOCAL_DB_VERSION = 1;
-    const LOCAL_SNAPSHOT_ID = "current";
-    const LOCAL_SCHEMA_VERSION = 1;
-    const LOCAL_TRANSACTION_TYPES = new Set([
-      "createNode",
-      "editNode",
-      "moveNode",
-      "deleteNodeTree",
-      "createMap",
-      "deleteMapAndSelectFallback",
-      "switchMap",
-      "moveConstellationMap",
-      "updateViewFrame"
-    ]);
 
     const canvas = document.getElementById("scene");
     const ctx = canvas.getContext("2d");
@@ -843,7 +893,14 @@
     let dpr = 1;
 
     const nodes = [];
+    const nodesById = new Map();
+    const childrenByParentId = new Map();
     const links = [];
+    const visibleRenderNodes = [];
+    const visibleRenderLinks = [];
+    let lastRenderCullingMetrics = null;
+    let lastLinkRenderDiagnostics = null;
+    let lastLinkCostDiagnostics = null;
     let maps = [];
     let activeMapId = null;
     let mapIdCounter = 0;
@@ -867,9 +924,18 @@
     let saveTimeout = null;
     let workspaceLoaded = false;
     let workspaceLoading = false;
-    let localDbPromise = null;
-    let persistenceChain = Promise.resolve();
-    let localRevision = 0;
+    let startupFirstReadyFramePending = false;
+    let startupProfileCompleted = false;
+    const startupDbName = startupProfilingEnabled ? startupSearchParams.get("perfStartupDb") : null;
+    const localSyncEngine = new LocalSyncEngine({
+      profiler: startupProfiler,
+      store: createIndexedDbSyncStore({
+        ...(startupDbName ? { dbName: startupDbName } : {}),
+        profiler: startupProfiler
+      })
+    });
+    let currentSharedSnapshot = null;
+    let currentDeviceSnapshot = null;
     let pendingServiceWorker = null;
     let pendingServiceWorkerRelease = null;
     let shouldReloadForServiceWorkerUpdate = false;
@@ -1717,188 +1783,264 @@
       return JSON.parse(JSON.stringify(value));
     }
 
-    function requestToPromise(request) {
-      return new Promise((resolve, reject) => {
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-    }
-
-    function openLocalDb() {
-      if (!("indexedDB" in window)) {
-        return Promise.reject(new Error("IndexedDB no esta disponible."));
-      }
-
-      if (localDbPromise) return localDbPromise;
-
-      localDbPromise = new Promise((resolve, reject) => {
-        const request = indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_VERSION);
-
-        request.onupgradeneeded = () => {
-          const db = request.result;
-
-          if (!db.objectStoreNames.contains("snapshots")) {
-            db.createObjectStore("snapshots", { keyPath: "id" });
-          }
-
-          if (!db.objectStoreNames.contains("transactions")) {
-            const transactionsStore = db.createObjectStore("transactions", { keyPath: "id" });
-            transactionsStore.createIndex("status", "status", { unique: false });
-            transactionsStore.createIndex("createdAt", "createdAt", { unique: false });
-          }
-
-          if (!db.objectStoreNames.contains("meta")) {
-            db.createObjectStore("meta", { keyPath: "key" });
-          }
-        };
-
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-        request.onblocked = () => {
-          console.warn("La base local esta bloqueada por otra pestana.");
-        };
-      });
-
-      return localDbPromise;
-    }
-
-    function queuePersistenceTask(task) {
-      const queuedTask = persistenceChain.then(task, task);
-      persistenceChain = queuedTask.catch(() => {});
-      return queuedTask;
-    }
-
-    function nextLocalRevision() {
-      localRevision = Math.max(0, toFiniteNumber(localRevision, 0)) + 1;
-      return localRevision;
-    }
-
-    function createTransactionId() {
-      const randomPart = Math.random().toString(36).slice(2, 10);
-      return `tx_${Date.now()}_${randomPart}`;
-    }
-
-    function createLocalTransactionRecord(type, payload, revision) {
-      if (!LOCAL_TRANSACTION_TYPES.has(type)) {
-        throw new Error(`Tipo de transaccion desconocido: ${type}`);
-      }
-
-      return {
-        id: createTransactionId(),
-        type,
-        createdAt: Date.now(),
-        localRevision: revision,
-        status: "pending",
-        payload: clonePersistedValue(payload || {})
-      };
-    }
-
-    function createLocalSnapshotRecord(state, revision) {
-      return {
-        id: LOCAL_SNAPSHOT_ID,
-        schemaVersion: LOCAL_SCHEMA_VERSION,
-        storageVersion: STORAGE_VERSION,
-        localRevision: revision,
-        savedAt: Date.now(),
-        state: clonePersistedValue(state)
-      };
-    }
-
-    function writeLocalCommit(snapshotRecord, transactionRecord = null, metaRecords = []) {
-      return openLocalDb().then(db => new Promise((resolve, reject) => {
-        const tx = db.transaction(["snapshots", "transactions", "meta"], "readwrite");
-
-        tx.objectStore("snapshots").put(snapshotRecord);
-        tx.objectStore("meta").put({ key: "localRevision", value: snapshotRecord.localRevision });
-
-        for (const record of metaRecords) {
-          tx.objectStore("meta").put(record);
-        }
-
-        if (transactionRecord) {
-          tx.objectStore("transactions").put(transactionRecord);
-        }
-
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error || new Error("Transaccion local abortada."));
-      }));
-    }
-
-    function writeLocalMetaRecords(metaRecords) {
-      return openLocalDb().then(db => new Promise((resolve, reject) => {
-        const tx = db.transaction(["meta"], "readwrite");
-        const store = tx.objectStore("meta");
-
-        for (const record of metaRecords) {
-          store.put(record);
-        }
-
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error || new Error("Transaccion local abortada."));
-      }));
-    }
-
-    function setLocalMetaValue(key, value) {
-      return queuePersistenceTask(() => writeLocalMetaRecords([{ key, value }]));
-    }
-
-    async function loadLocalSnapshot() {
-      const db = await openLocalDb();
-      const tx = db.transaction(["snapshots"], "readonly");
-      const snapshot = await requestToPromise(tx.objectStore("snapshots").get(LOCAL_SNAPSHOT_ID));
-      return snapshot || null;
-    }
-
     function captureWorkspaceState(syncActiveMap = true) {
       if (syncActiveMap) {
         syncActiveMapInMemory();
       }
 
-      return clonePersistedValue({
+      const state = {
         version: STORAGE_VERSION,
         activeMapId,
         mapIdCounter,
         mapsView: captureMapsViewState(),
         maps
+      };
+      ensureRuntimeSyncIds(state);
+      return clonePersistedValue(state);
+    }
+
+    function getMapSyncId(mapId, state = null) {
+      const runtimeState = state || captureWorkspaceState(false);
+      const map = runtimeState.maps.find(candidate => candidate.id === mapId);
+      if (map?.syncId) return map.syncId;
+
+      return Object.entries(currentDeviceSnapshot?.mapAliases || {})
+        .find(([, alias]) => alias === mapId)?.[0] || null;
+    }
+
+    function getNodeSyncId(mapId, nodeId, state = null) {
+      const runtimeState = state || captureWorkspaceState(false);
+      const map = runtimeState.maps.find(candidate => candidate.id === mapId);
+      const node = map?.nodes.find(candidate => candidate.id === nodeId);
+      if (node?.syncId) return node.syncId;
+
+      const mapSyncId = getMapSyncId(mapId, runtimeState);
+      return Object.entries(currentDeviceSnapshot?.nodeAliases?.[mapSyncId] || {})
+        .find(([, alias]) => alias === nodeId)?.[0] || null;
+    }
+
+    function translateSharedTransaction(type, payload, state) {
+      const mapSyncId = getMapSyncId(payload.mapId ?? payload.deletedMapId, state);
+
+      if (type === "createMap") {
+        const map = state.maps.find(candidate => candidate.id === payload.mapId);
+        return map
+          ? { type: "map.create", target: { kind: "map", syncId: map.syncId }, payload: { map: sharedMapFromRuntime(map) } }
+          : null;
+      }
+
+      if (type === "deleteMapAndSelectFallback") {
+        const deletedMapSyncId = payload.deletedMapSyncId || mapSyncId;
+        return deletedMapSyncId
+          ? { type: "map.delete", target: { kind: "map", syncId: deletedMapSyncId }, payload: { mapSyncId: deletedMapSyncId } }
+          : null;
+      }
+
+      if (type === "moveConstellationMap") {
+        return mapSyncId
+          ? {
+              type: "map.move",
+              target: { kind: "map", syncId: mapSyncId },
+              payload: { mapSyncId, position: clonePersistedValue(payload.to) }
+            }
+          : null;
+      }
+
+      if (type === "createNode") {
+        const map = state.maps.find(candidate => candidate.id === payload.mapId);
+        const node = map?.nodes.find(candidate => candidate.id === payload.node?.id);
+        return map && node
+          ? {
+              type: "node.create",
+              target: { kind: "node", mapSyncId: map.syncId, syncId: node.syncId },
+              payload: { mapSyncId: map.syncId, node: sharedNodeFromRuntime(node) }
+            }
+          : null;
+      }
+
+      if (type === "editNode") {
+        const nodeSyncId = payload.nodeSyncId || payload.syncId || getNodeSyncId(payload.mapId, payload.nodeId, state);
+        const changes = {};
+        if (payload.label !== payload.previousLabel) changes.label = payload.label;
+        if (payload.note !== payload.previousNote) changes.note = payload.note;
+        return mapSyncId && nodeSyncId
+          ? {
+              type: "node.edit",
+              target: { kind: "node", mapSyncId, syncId: nodeSyncId },
+              payload: { mapSyncId, nodeSyncId, changes }
+            }
+          : null;
+      }
+
+      if (type === "moveNode") {
+        const nodeSyncId = payload.nodeSyncId || payload.syncId || getNodeSyncId(payload.mapId, payload.nodeId, state);
+        return mapSyncId && nodeSyncId
+          ? {
+              type: "node.move",
+              target: { kind: "node", mapSyncId, syncId: nodeSyncId },
+              payload: { mapSyncId, nodeSyncId, position: clonePersistedValue(payload.to) }
+            }
+          : null;
+      }
+
+      if (type === "deleteNodeTree") {
+        const nodeSyncIds = (payload.deletedNodes || [])
+          .map(node => node.syncId)
+          .filter(Boolean);
+        const rootSyncId = payload.rootNodeSyncId || nodeSyncIds[0] || null;
+        return mapSyncId && rootSyncId
+          ? {
+              type: "node.deleteTree",
+              target: { kind: "node", mapSyncId, syncId: rootSyncId },
+              payload: { mapSyncId, nodeSyncIds }
+            }
+          : null;
+      }
+
+      return null;
+    }
+
+    function prepareFastSharedChange(type, payload) {
+      if (!currentSharedSnapshot || !currentDeviceSnapshot) return null;
+
+      const map = getMapById(payload.mapId);
+      if (!map?.syncId) return null;
+
+      let nodeSyncId = null;
+      if (type === "editNode" || type === "moveNode") {
+        const node = payload.mapId === activeMapId
+          ? getNodeById(payload.nodeId)
+          : map.nodes?.find(candidate => candidate.id === payload.nodeId);
+        nodeSyncId = node?.syncId || null;
+        if (!nodeSyncId) return null;
+      }
+
+      return createFastSharedChange(type, payload, {
+        mapSyncId: map.syncId,
+        nodeSyncId
       });
     }
 
-    function saveLocalSnapshot(state) {
-      const revision = nextLocalRevision();
-      const snapshotRecord = createLocalSnapshotRecord(state, revision);
-      return queuePersistenceTask(() => writeLocalCommit(snapshotRecord));
+    function getPrivateMapIdentity(mapId, selectedNodeId = null) {
+      const map = getMapById(mapId);
+      if (!map?.syncId) return null;
+
+      if (selectedNodeId === null) {
+        return { mapSyncId: map.syncId, selectedNodeSyncId: null };
+      }
+
+      const node = mapId === activeMapId
+        ? getNodeById(selectedNodeId)
+        : map.nodes?.find(candidate => candidate.id === selectedNodeId);
+      return node?.syncId
+        ? { mapSyncId: map.syncId, selectedNodeSyncId: node.syncId }
+        : null;
     }
 
-    function enqueueLocalTransaction(type, payload = {}, revisionOverride = null) {
-      const revision = Number.isFinite(revisionOverride) ? revisionOverride : nextLocalRevision();
-      const transactionRecord = createLocalTransactionRecord(type, payload, revision);
+    function createViewFrameDevicePatches(frame, includeConstellationView = true) {
+      const identity = getPrivateMapIdentity(frame?.activeMapId, frame?.selectedNodeId ?? null);
+      if (!identity || !frame?.camera) return null;
 
-      return queuePersistenceTask(() => openLocalDb().then(db => new Promise((resolve, reject) => {
-        const tx = db.transaction(["transactions", "meta"], "readwrite");
-        tx.objectStore("transactions").put(transactionRecord);
-        tx.objectStore("meta").put({ key: "localRevision", value: revision });
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error || new Error("Transaccion local abortada."));
-      })));
+      const patches = [
+        {
+          type: "setSelectedNode",
+          mapSyncId: identity.mapSyncId,
+          selectedNodeSyncId: identity.selectedNodeSyncId
+        },
+        {
+          type: "setMapCamera",
+          mapSyncId: identity.mapSyncId,
+          camera: frame.camera
+        }
+      ];
+      if (includeConstellationView) {
+        if (!frame.mapsView) return null;
+        patches.push({ type: "setConstellationView", view: frame.mapsView });
+      }
+      return patches;
+    }
+
+    function prepareFastDevicePatches(type, payload) {
+      if (!currentSharedSnapshot || !currentDeviceSnapshot) return null;
+
+      let patches;
+      if (type === "updateViewFrame") {
+        patches = createViewFrameDevicePatches(payload);
+      } else if (type === "switchMap") {
+        const previousPatches = createViewFrameDevicePatches(payload.previousViewFrame, false);
+        const activeMap = getMapById(payload.activeMapId);
+        if (!previousPatches || !activeMap?.syncId || !payload.mapsView) return null;
+        patches = [
+          ...previousPatches,
+          { type: "setConstellationView", view: payload.mapsView },
+          { type: "setActiveMap", activeMapSyncId: activeMap.syncId }
+        ];
+      } else {
+        return null;
+      }
+
+      try {
+        return filterChangedDevicePatches(currentDeviceSnapshot, patches);
+      } catch (error) {
+        return null;
+      }
+    }
+
+    async function ensureSyncEngineHasWorkspace(state) {
+      if (currentSharedSnapshot) return;
+      const adopted = await localSyncEngine.adoptWorkspaceState(state);
+      currentSharedSnapshot = adopted.sharedSnapshot;
+      currentDeviceSnapshot = adopted.deviceSnapshot;
     }
 
     function commitLocalTransaction(type, payload = {}, options = {}) {
       try {
+        const persistence = getTransactionPersistenceContract(type);
         const syncActiveMap = options.syncActiveMap !== false;
-        const revision = nextLocalRevision();
-        const state = captureWorkspaceState(syncActiveMap);
-        const snapshotRecord = createLocalSnapshotRecord(state, revision);
-        const transactionRecord = createLocalTransactionRecord(type, payload, revision);
+        const fastSharedChange = persistence.fastShared
+          ? prepareFastSharedChange(type, payload)
+          : null;
+        const fastDevicePatches = persistence.fastPrivate
+          ? prepareFastDevicePatches(type, payload)
+          : null;
+        const state = requiresWorkspaceCapture(type, fastSharedChange, fastDevicePatches)
+          ? captureWorkspaceState(syncActiveMap)
+          : null;
+        const task = async () => {
+          if (state) {
+            await ensureSyncEngineHasWorkspace(state);
+          }
+          const deviceState = persistence.private
+            && fastDevicePatches === null
+            ? captureDeviceSnapshot(state, currentDeviceSnapshot)
+            : null;
 
-        return queuePersistenceTask(() => writeLocalCommit(snapshotRecord, transactionRecord))
-          .catch((error) => {
-            console.error("No se pudo confirmar la transaccion local:", error);
-          });
+          if (persistence.shared) {
+            const sharedChange = fastSharedChange || translateSharedTransaction(type, payload, state);
+            if (sharedChange) {
+              await localSyncEngine.recordSharedChange(
+                sharedChange.type,
+                sharedChange.target,
+                sharedChange.payload
+              );
+              currentSharedSnapshot = localSyncEngine.sharedSnapshot;
+            }
+          }
+
+          if (fastDevicePatches?.length) {
+            const privateCommit = localSyncEngine.recordDevicePatches(fastDevicePatches);
+            currentDeviceSnapshot = localSyncEngine.deviceSnapshot;
+            await privateCommit;
+          } else if (deviceState) {
+            currentDeviceSnapshot = await localSyncEngine.saveDeviceState(deviceState);
+          }
+        };
+
+        return task().catch(error => {
+          console.error("No se pudo confirmar el cambio local:", error);
+        });
       } catch (error) {
-        console.error("No se pudo preparar la transaccion local:", error);
+        console.error("No se pudo preparar el cambio local:", error);
         return Promise.resolve();
       }
     }
@@ -1922,9 +2064,12 @@
 
     function serializeNodeForTransaction(node) {
       if (!node) return null;
+      const parent = node.parentId !== null ? getNodeById(node.parentId) : null;
       return {
         id: node.id,
+        syncId: node.syncId,
         parentId: node.parentId,
+        parentSyncId: parent?.syncId || node.parentSyncId || null,
         level: node.level,
         isCenter: Boolean(node.isCenter),
         label: node.label,
@@ -1935,38 +2080,45 @@
     }
 
     function restorePersistedState(state, shouldResave = false) {
-      if (!state || !Array.isArray(state.maps)) return false;
+      return measureStartupSync(startupProfiler, "hydration.restorePersistedState.total", () => {
+        if (!state || !Array.isArray(state.maps)) return false;
 
-      const restoredMaps = state.maps.map((map, index) =>
-        sanitizeStoredMap(map, Number.isFinite(Number(map && map.id)) ? Number(map.id) : index + 1)
-      );
+        const restoredMaps = measureStartupSync(
+          startupProfiler,
+          "hydration.sanitizeMaps",
+          () => state.maps.map((map, index) =>
+            sanitizeStoredMap(map, Number.isFinite(Number(map && map.id)) ? Number(map.id) : index + 1)
+          ),
+          { mapCount: state.maps.length }
+        );
 
-      if (!restoredMaps.length) return false;
+        if (!restoredMaps.length) return false;
 
-      const needsResave =
-        shouldResave ||
-        state.version !== STORAGE_VERSION ||
-        !Number.isFinite(Number(state.mapIdCounter)) ||
-        !Number.isFinite(Number(state.activeMapId)) ||
-        state.maps.some(map => !Number.isFinite(Number(map && map.id))) ||
-        state.maps.some(map => !readStoredStarIdentity(map)) ||
-        !sanitizeMapsViewState(state.mapsView);
+        const needsResave =
+          shouldResave ||
+          state.version !== STORAGE_VERSION ||
+          !Number.isFinite(Number(state.mapIdCounter)) ||
+          !Number.isFinite(Number(state.activeMapId)) ||
+          state.maps.some(map => !Number.isFinite(Number(map && map.id))) ||
+          state.maps.some(map => !readStoredStarIdentity(map)) ||
+          !sanitizeMapsViewState(state.mapsView);
 
-      return restoreWorkspace(
-        restoredMaps,
-        Number(state.activeMapId),
-        toFiniteNumber(state.mapIdCounter, 0),
-        sanitizeMapsViewState(state.mapsView),
-        needsResave
-      );
+        return restoreWorkspace(
+          restoredMaps,
+          Number(state.activeMapId),
+          toFiniteNumber(state.mapIdCounter, 0),
+          sanitizeMapsViewState(state.mapsView),
+          needsResave
+        );
+      });
     }
 
-    function loadLocalStorageState() {
+    function readLegacyLocalStorageState() {
       try {
         const currentRaw = localStorage.getItem(STORAGE_KEY);
         if (currentRaw) {
           const state = JSON.parse(currentRaw);
-          if (restorePersistedState(state, false)) return true;
+          if (state && Array.isArray(state.maps)) return state;
         }
 
         const legacyMultiRaw = localStorage.getItem(LEGACY_MULTI_STORAGE_KEY);
@@ -1979,67 +2131,69 @@
 
             if (restoredMaps.length) {
               const activeIndex = Math.floor(clamp(toFiniteNumber(state.activeMapIndex, 0), 0, restoredMaps.length - 1));
-              return restoreWorkspace(
-                restoredMaps,
-                restoredMaps[activeIndex].id,
-                restoredMaps.length,
-                null,
-                true
-              );
+              return {
+                version: STORAGE_VERSION,
+                activeMapId: restoredMaps[activeIndex].id,
+                mapIdCounter: restoredMaps.length,
+                mapsView: null,
+                maps: restoredMaps
+              };
             }
           }
         }
 
         const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
-        if (!legacyRaw) return false;
+        if (!legacyRaw) return null;
 
         const legacyState = JSON.parse(legacyRaw);
         if (!legacyState || !Array.isArray(legacyState.nodes) || !Array.isArray(legacyState.links)) {
-          return false;
+          return null;
         }
 
         const restoredMap = sanitizeStoredMap(legacyState, 1);
-        return restoreWorkspace([restoredMap], restoredMap.id, 1, null, true);
+        return {
+          version: STORAGE_VERSION,
+          activeMapId: restoredMap.id,
+          mapIdCounter: 1,
+          mapsView: null,
+          maps: [restoredMap]
+        };
       } catch (error) {
-        console.error("No se pudo cargar el estado heredado:", error);
-        return false;
+        console.error("No se pudo leer el estado heredado:", error);
+        return null;
       }
-    }
-
-    async function migrateLocalStorageStateIfNeeded() {
-      const restored = loadLocalStorageState();
-      const migratedAt = Date.now();
-
-      try {
-        await setLocalMetaValue("localStorageMigratedAt", migratedAt);
-      } catch (error) {
-        console.error("No se pudo marcar la migracion local:", error);
-      }
-
-      if (!restored) return false;
-
-      await saveState(false);
-      return true;
     }
 
     async function loadState() {
       try {
-        const snapshotRecord = await loadLocalSnapshot();
-        if (snapshotRecord && snapshotRecord.state) {
-          localRevision = toFiniteNumber(snapshotRecord.localRevision, 0);
-          if (restorePersistedState(snapshotRecord.state, false)) {
-            return true;
-          }
-        }
+        const initialized = await measureStartupAsync(startupProfiler, "app.loadState.engine", () =>
+          localSyncEngine.initialize({
+            legacyState: measureStartupSync(
+              startupProfiler,
+              "app.readLegacyLocalStorage",
+              () => readLegacyLocalStorageState()
+            )
+          })
+        );
+        currentSharedSnapshot = initialized.sharedSnapshot;
+        currentDeviceSnapshot = initialized.deviceSnapshot;
+        if (!currentSharedSnapshot) return false;
 
-        return await migrateLocalStorageStateIfNeeded();
+        const materialized = materializeWorkspace(currentSharedSnapshot, currentDeviceSnapshot, {
+          profiler: startupProfiler
+        });
+        currentDeviceSnapshot = materialized.deviceSnapshot;
+        return restorePersistedState(materialized.state, false);
       } catch (error) {
         console.error("No se pudo cargar el estado local:", error);
-        return loadLocalStorageState();
+        if (error && error.code === "SYNC_MIGRATION_FAILED") throw error;
+        const legacyState = readLegacyLocalStorageState();
+        return legacyState ? restorePersistedState(legacyState, false) : false;
       }
     }
 
     async function initializeWorkspace() {
+      const endInitializeWorkspace = startupProfiler.start("app.initializeWorkspace.total");
       try {
         const restored = await loadState();
         if (!restored) {
@@ -2054,6 +2208,16 @@
       } finally {
         workspaceLoaded = true;
         workspaceLoading = false;
+        startupFirstReadyFramePending = startupProfilingEnabled;
+        startupProfiler.setContext({
+          mapCount: maps.length,
+          totalNodeCount: maps.reduce((total, map) => total + (map.nodes?.length || 0), 0),
+          activeNodeCount: nodes.length,
+          operationCount: localSyncEngine.operations.length,
+          privatePatchCount: localSyncEngine.devicePatches.length
+        });
+        startupProfiler.mark("app.workspaceReady");
+        endInitializeWorkspace();
       }
     }
 
@@ -2102,9 +2266,12 @@
 
     function createNode({ x, y, parentId = null, level = 0, isCenter = false, label = "", note = "" }) {
       const id = ++nodeIdCounter;
+      const parent = parentId !== null ? getNodeById(parentId) : null;
       const node = {
         id,
+        syncId: createSyncId("node"),
         parentId,
+        parentSyncId: parent?.syncId || null,
         level,
         isCenter,
         label: label || (isCenter ? "Centro" : "Nodo"),
@@ -2128,6 +2295,8 @@
       };
 
       nodes.push(node);
+      indexNodeById(nodesById, node);
+      indexNodeByParentId(childrenByParentId, node);
 
       if (parentId !== null) {
         links.push({
@@ -2370,9 +2539,12 @@
 
       function addMapNode({ x, y, parentId = null, level = 0, isCenter = false, label = "", note = "" }) {
         const id = ++nextNodeId;
+        const parent = parentId !== null ? mapNodes.find(node => node.id === parentId) : null;
         mapNodes.push({
           id,
+          syncId: createSyncId("node"),
           parentId,
+          parentSyncId: parent?.syncId || null,
           level,
           isCenter,
           label: label || (isCenter ? "Centro" : "Nodo"),
@@ -2415,6 +2587,7 @@
 
       return {
         id: mapId,
+        syncId: createSyncId("map"),
         starType: starIdentity.starType,
         starVariant: starIdentity.starVariant,
         starScale: starIdentity.starScale,
@@ -2437,8 +2610,10 @@
       const rawNodes = Array.isArray(rawMap && rawMap.nodes) ? rawMap.nodes : [];
       const rawLinks = Array.isArray(rawMap && rawMap.links) ? rawMap.links : [];
       const mapId = toFiniteNumber(rawMap && rawMap.id, fallbackId);
+      const mapSyncId = rawMap && rawMap.syncId ? rawMap.syncId : createSyncId("map");
 
       const validNodeIds = new Set();
+      const nodeSyncIdById = new Map();
       const sanitizedNodes = [];
       let maxNodeId = 0;
 
@@ -2450,12 +2625,16 @@
           ? null
           : toFiniteNumber(rawNode.parentId, null);
         const isCenter = Boolean(rawNode.isCenter);
+        const nodeSyncId = rawNode.syncId || createSyncId("node");
         maxNodeId = Math.max(maxNodeId, nodeId);
         validNodeIds.add(nodeId);
+        nodeSyncIdById.set(nodeId, nodeSyncId);
 
         sanitizedNodes.push({
           id: nodeId,
+          syncId: nodeSyncId,
           parentId,
+          parentSyncId: rawNode.parentSyncId || null,
           level: toFiniteNumber(rawNode.level, 0),
           isCenter,
           label: sanitizePersistedText(rawNode.label, isCenter ? "Centro" : "Nodo"),
@@ -2469,6 +2648,9 @@
         if (node.parentId !== null && !validNodeIds.has(node.parentId)) {
           node.parentId = null;
         }
+        node.parentSyncId = node.parentId !== null
+          ? nodeSyncIdById.get(node.parentId) || node.parentSyncId || null
+          : null;
       }
 
       const sanitizedLinks = [];
@@ -2494,6 +2676,7 @@
 
       return {
         id: mapId,
+        syncId: mapSyncId,
         starType: starIdentity.starType,
         starVariant: starIdentity.starVariant,
         starScale: starIdentity.starScale,
@@ -2521,8 +2704,10 @@
     function serializeCurrentMap(mapId = activeMapId) {
       const existingMap = getMapById(mapId);
       const starIdentity = sanitizeStarIdentity(existingMap);
+      const nodeSyncIdById = new Map(nodes.map(node => [node.id, node.syncId || createSyncId("node")]));
       return {
         id: mapId,
+        syncId: existingMap?.syncId || createSyncId("map"),
         starType: starIdentity.starType,
         starVariant: starIdentity.starVariant,
         starScale: starIdentity.starScale,
@@ -2540,7 +2725,9 @@
         },
         nodes: nodes.map(node => ({
           id: node.id,
+          syncId: node.syncId || nodeSyncIdById.get(node.id),
           parentId: node.parentId,
+          parentSyncId: node.parentId !== null ? nodeSyncIdById.get(node.parentId) || null : null,
           level: node.level,
           isCenter: node.isCenter,
           label: node.label,
@@ -2621,7 +2808,15 @@
     }
 
     function applyMapState(state) {
+      return measureStartupSync(startupProfiler, "hydration.applyMapState.total", () => applyMapStateMeasured(state), {
+        nodeCount: state?.nodes?.length || 0
+      });
+    }
+
+    function applyMapStateMeasured(state) {
       nodes.length = 0;
+      nodesById.clear();
+      childrenByParentId.clear();
       links.length = 0;
 
       activeMapId = state.id;
@@ -2649,42 +2844,55 @@
       camera.zoom = clamp(toFiniteNumber(nextCamera.zoom, 1), D0_ZOOM_MIN, D0_ZOOM_MAX);
       camera.targetZoom = clamp(toFiniteNumber(nextCamera.targetZoom, camera.zoom), D0_ZOOM_MIN, D0_ZOOM_MAX);
 
-      for (const savedNode of state.nodes || []) {
-        nodes.push({
-          id: savedNode.id,
-          parentId: savedNode.parentId ?? null,
-          level: toFiniteNumber(savedNode.level, 0),
-          isCenter: Boolean(savedNode.isCenter),
-          label: sanitizePersistedText(savedNode.label, savedNode.isCenter ? "Centro" : "Nodo"),
-          note: typeof savedNode.note === "string" ? savedNode.note : "",
+      measureStartupSync(startupProfiler, "hydration.applyMapState.copyNodes", () => {
+        for (const savedNode of state.nodes || []) {
+          nodes.push({
+            id: savedNode.id,
+            syncId: savedNode.syncId || createSyncId("node"),
+            parentId: savedNode.parentId ?? null,
+            parentSyncId: savedNode.parentSyncId || null,
+            level: toFiniteNumber(savedNode.level, 0),
+            isCenter: Boolean(savedNode.isCenter),
+            label: sanitizePersistedText(savedNode.label, savedNode.isCenter ? "Centro" : "Nodo"),
+            note: typeof savedNode.note === "string" ? savedNode.note : "",
 
-          x: toFiniteNumber(savedNode.x, 0),
-          y: toFiniteNumber(savedNode.y, 0),
+            x: toFiniteNumber(savedNode.x, 0),
+            y: toFiniteNumber(savedNode.y, 0),
 
-          vx: 0,
-          vy: 0,
+            vx: 0,
+            vy: 0,
 
-          renderX: toFiniteNumber(savedNode.x, 0),
-          renderY: toFiniteNumber(savedNode.y, 0),
+            renderX: toFiniteNumber(savedNode.x, 0),
+            renderY: toFiniteNumber(savedNode.y, 0),
 
-          baseRadius: savedNode.isCenter ? 20 : 14,
-          visualRadius: savedNode.isCenter ? 20 : 14,
-          targetRadius: savedNode.isCenter ? 20 : 14,
+            baseRadius: savedNode.isCenter ? 20 : 14,
+            visualRadius: savedNode.isCenter ? 20 : 14,
+            targetRadius: savedNode.isCenter ? 20 : 14,
 
-          pulseUntil: 0,
-          labelFloatSeed: Math.random() * Math.PI * 2
-        });
-      }
-
-      for (const savedLink of state.links || []) {
-        if (getNodeById(savedLink.from) && getNodeById(savedLink.to)) {
-          links.push({
-            from: savedLink.from,
-            to: savedLink.to,
-            lastEnergy: 0
+            pulseUntil: 0,
+            labelFloatSeed: Math.random() * Math.PI * 2
           });
         }
-      }
+      }, { nodeCount: state.nodes?.length || 0 });
+
+      measureStartupSync(startupProfiler, "hydration.applyMapState.nodesById", () =>
+        rebuildNodesById(nodes, nodesById)
+      );
+      measureStartupSync(startupProfiler, "hydration.applyMapState.childrenByParentId", () =>
+        rebuildChildrenByParentId(nodes, childrenByParentId)
+      );
+
+      measureStartupSync(startupProfiler, "hydration.applyMapState.links", () => {
+        for (const savedLink of state.links || []) {
+          if (getNodeById(savedLink.from) && getNodeById(savedLink.to)) {
+            links.push({
+              from: savedLink.from,
+              to: savedLink.to,
+              lastEnergy: 0
+            });
+          }
+        }
+      }, { linkCount: state.links?.length || 0 });
 
       if (!nodes.length) {
         const replacement = createDefaultMapState(state.id);
@@ -2802,6 +3010,7 @@
 
       commitLocalTransaction("deleteMapAndSelectFallback", {
         deletedMapId: mapId,
+        deletedMapSyncId: map.syncId,
         nextActiveMapId: activeMapId,
         nextOverlaySelectedMapId: overlaySelectedMapId,
         mapsView: captureMapsViewState()
@@ -2906,9 +3115,11 @@
       syncActiveMapInMemory();
 
       const previousMapId = activeMapId;
+      const previousViewFrame = createViewFramePayload("switchMapPrevious");
       applyMapState(nextMap);
       commitLocalTransaction("switchMap", {
         previousMapId,
+        previousViewFrame,
         activeMapId,
         mapsView: captureMapsViewState()
       }, { syncActiveMap: false });
@@ -3032,11 +3243,11 @@
     }
 
     function getNodeById(id) {
-      return nodes.find(n => n.id === id);
+      return nodesById.get(id);
     }
 
     function getChildren(parentId) {
-      return nodes.filter(n => n.parentId === parentId);
+      return getChildrenByParentId(childrenByParentId, parentId);
     }
 
     function getDescendants(nodeId) {
@@ -3045,7 +3256,7 @@
 
       while (stack.length) {
         const current = stack.pop();
-        const children = nodes.filter(n => n.parentId === current);
+        const children = getChildren(current);
         for (const child of children) {
           result.push(child.id);
           stack.push(child.id);
@@ -3121,15 +3332,13 @@
         .filter(link => idsToDelete.has(link.from) || idsToDelete.has(link.to))
         .map(link => ({ from: link.from, to: link.to }));
 
-      for (let i = nodes.length - 1; i >= 0; i--) {
-        if (idsToDelete.has(nodes[i].id)) nodes.splice(i, 1);
-      }
-
-      for (let i = links.length - 1; i >= 0; i--) {
-        if (idsToDelete.has(links[i].from) || idsToDelete.has(links[i].to)) {
-          links.splice(i, 1);
-        }
-      }
+      deleteTreeCollectionsInPlace({
+        nodes,
+        links,
+        idsToDelete,
+        nodesById,
+        childrenByParentId
+      });
 
       if (editingNodeId && idsToDelete.has(editingNodeId)) closeEditor(false);
 
@@ -3138,6 +3347,7 @@
       commitLocalTransaction("deleteNodeTree", {
         mapId: activeMapId,
         rootNodeId: node.id,
+        rootNodeSyncId: node.syncId,
         deletedNodeIds: [...idsToDelete],
         deletedNodes,
         deletedLinks,
@@ -4056,9 +4266,9 @@
       };
     }
 
-    function drawLinks() {
+    function drawLinks(renderLinks = links) {
       const zoom = camera.zoom;
-      for (const link of links) {
+      for (const link of renderLinks) {
         const aNode = getNodeById(link.from);
         const bNode = getNodeById(link.to);
         if (!aNode || !bNode) continue;
@@ -4112,6 +4322,266 @@
           ctx.stroke();
         }
       }
+    }
+
+    function drawLinksDiagnosed(renderLinks, diagnostics) {
+      const zoom = camera.zoom;
+      for (const link of renderLinks) {
+        const resolveStarted = diagnostics.startStage();
+        const aNode = getNodeById(link.from);
+        const bNode = getNodeById(link.to);
+        if (!aNode || !bNode) {
+          diagnostics.endStage("resolveEndpointsMs", resolveStarted);
+          diagnostics.recordMissingEndpoint();
+          continue;
+        }
+
+        const aPoint = projectWorldPoint(aNode.renderX, aNode.renderY);
+        const bPoint = projectWorldPoint(bNode.renderX, bNode.renderY);
+        const a = { x: aPoint.x, y: aPoint.y, vx: aNode.vx * zoom, vy: aNode.vy * zoom };
+        const b = { x: bPoint.x, y: bPoint.y, vx: bNode.vx * zoom, vy: bNode.vy * zoom };
+
+        const active = aNode.id === selectedNodeId || bNode.id === selectedNodeId;
+        const totalEnergy =
+          Math.abs(a.vx) + Math.abs(a.vy) + Math.abs(b.vx) + Math.abs(b.vy);
+
+        link.lastEnergy = link.lastEnergy * 0.85 + totalEnergy * 0.15;
+
+        const dist = Math.hypot(b.x - a.x, b.y - a.y);
+        const segments = Math.max(18, Math.min(42, Math.floor(dist / 10)));
+        diagnostics.endStage("resolveEndpointsMs", resolveStarted);
+        diagnostics.recordResolvedLink(segments, active);
+
+        const pointsStarted = diagnostics.startStage();
+        const points = [];
+        for (let i = 0; i <= segments; i++) {
+          const t = i / segments;
+          points.push(organicPointOnLink(a, b, t));
+        }
+        diagnostics.endStage("generatePointsMs", pointsStarted);
+
+        const visibilityStarted = diagnostics.startStage();
+        diagnostics.recordSampledVisibility(
+          linkRenderDiagnosticsModule.polylineIntersectsViewport(points, diagnostics.viewport),
+          segments
+        );
+        diagnostics.endStage("visibilityProbeMs", visibilityStarted);
+
+        const mainPathStarted = diagnostics.startStage();
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+
+        for (let i = 1; i < points.length - 1; i++) {
+          const mx = (points[i].x + points[i + 1].x) * 0.5;
+          const my = (points[i].y + points[i + 1].y) * 0.5;
+          ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
+        }
+
+        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+        ctx.strokeStyle = active ? "rgba(218, 235, 248, 0.42)" : "rgba(150, 182, 205, 0.16)";
+        ctx.lineWidth = Math.max(0.45, (active ? 1.55 : 1.1) * zoom);
+        diagnostics.endStage("buildMainPathMs", mainPathStarted);
+        diagnostics.recordMainPath(segments);
+
+        const mainStrokeStarted = diagnostics.startStage();
+        ctx.stroke();
+        diagnostics.endStage("strokeMainMs", mainStrokeStarted);
+
+        if (link.lastEnergy > 0.02 && active) {
+          const activePathStarted = diagnostics.startStage();
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length - 1; i++) {
+            const mx = (points[i].x + points[i + 1].x) * 0.5;
+            const my = (points[i].y + points[i + 1].y) * 0.5;
+            ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
+          }
+          ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+          ctx.strokeStyle = "rgba(235, 245, 252, 0.05)";
+          ctx.lineWidth = Math.max(1, 4 * zoom);
+          diagnostics.endStage("buildActivePathMs", activePathStarted);
+          diagnostics.recordActivePath(segments);
+
+          const activeStrokeStarted = diagnostics.startStage();
+          ctx.stroke();
+          diagnostics.endStage("strokeActiveMs", activeStrokeStarted);
+        }
+      }
+    }
+
+    function drawLinksCostDiagnosed(renderLinks, diagnostics) {
+      const zoom = camera.zoom;
+      const mode = diagnostics.mode;
+      const uniformBatch = mode === "uniform-batch";
+      let resolvedLinks = 0;
+      if (uniformBatch) {
+        ctx.beginPath();
+      }
+
+      const appendOrganicPath = (points) => {
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let index = 1; index < points.length - 1; index += 1) {
+          const midpointX = (points[index].x + points[index + 1].x) * 0.5;
+          const midpointY = (points[index].y + points[index + 1].y) * 0.5;
+          ctx.quadraticCurveTo(points[index].x, points[index].y, midpointX, midpointY);
+        }
+        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+      };
+
+      for (const link of renderLinks) {
+        const resolveStarted = diagnostics.startStage();
+        const aNode = getNodeById(link.from);
+        const bNode = getNodeById(link.to);
+        if (!aNode || !bNode) {
+          diagnostics.endStage("resolveEndpointsMs", resolveStarted);
+          diagnostics.recordMissingEndpoint();
+          continue;
+        }
+
+        const aPoint = projectWorldPoint(aNode.renderX, aNode.renderY);
+        const bPoint = projectWorldPoint(bNode.renderX, bNode.renderY);
+        const a = { x: aPoint.x, y: aPoint.y, vx: aNode.vx * zoom, vy: aNode.vy * zoom };
+        const b = { x: bPoint.x, y: bPoint.y, vx: bNode.vx * zoom, vy: bNode.vy * zoom };
+        const active =
+          mode !== "no-active" &&
+          (aNode.id === selectedNodeId || bNode.id === selectedNodeId);
+        const totalEnergy =
+          Math.abs(a.vx) + Math.abs(a.vy) + Math.abs(b.vx) + Math.abs(b.vy);
+        link.lastEnergy = link.lastEnergy * 0.85 + totalEnergy * 0.15;
+        const lengthPx = Math.hypot(b.x - a.x, b.y - a.y);
+        const originalSegments = Math.max(18, Math.min(42, Math.floor(lengthPx / 10)));
+        const curvaturePx = Math.max(
+          Math.abs(a.vx) + Math.abs(a.vy),
+          Math.abs(b.vx) + Math.abs(b.vy)
+        ) * 24;
+        const descriptor = diagnostics.recordResolvedLink({
+          lengthPx,
+          originalSegments,
+          curvaturePx,
+          active
+        });
+        resolvedLinks += 1;
+        diagnostics.endStage("resolveEndpointsMs", resolveStarted, descriptor);
+
+        if (mode === "straight") {
+          const pathStarted = diagnostics.startStage();
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          diagnostics.recordPath(descriptor, 2);
+          diagnostics.endStage("buildPathMs", pathStarted, descriptor);
+          ctx.strokeStyle = active ? "rgba(218, 235, 248, 0.42)" : "rgba(150, 182, 205, 0.16)";
+          ctx.lineWidth = Math.max(0.45, (active ? 1.55 : 1.1) * zoom);
+          diagnostics.recordStyle(active ? "active-main" : "inactive-main");
+          const strokeStarted = diagnostics.startStage();
+          ctx.stroke();
+          diagnostics.recordStroke(descriptor);
+          diagnostics.endStage("strokeMs", strokeStarted, descriptor);
+          continue;
+        }
+
+        const generatedSegments = mode === "reduced-segments"
+          ? Math.min(8, originalSegments)
+          : originalSegments;
+        const pointsStarted = diagnostics.startStage();
+        const points = [];
+        for (let index = 0; index <= generatedSegments; index += 1) {
+          points.push(organicPointOnLink(a, b, index / generatedSegments));
+        }
+        diagnostics.recordGeneratedGeometry(descriptor, generatedSegments);
+        diagnostics.endStage("generatePointsMs", pointsStarted, descriptor);
+        if (mode === "points-only") continue;
+
+        const pathStarted = diagnostics.startStage();
+        if (!uniformBatch) ctx.beginPath();
+        appendOrganicPath(points);
+        diagnostics.recordPath(descriptor, generatedSegments + 2);
+        diagnostics.endStage("buildPathMs", pathStarted, descriptor);
+        if (mode === "path-no-stroke") {
+          if (active && link.lastEnergy > 0.02) {
+            const activePathStarted = diagnostics.startStage();
+            ctx.beginPath();
+            appendOrganicPath(points);
+            diagnostics.recordPath(descriptor, generatedSegments + 2);
+            diagnostics.endStage("buildPathMs", activePathStarted, descriptor);
+          }
+          continue;
+        }
+        if (uniformBatch) continue;
+
+        ctx.strokeStyle = active ? "rgba(218, 235, 248, 0.42)" : "rgba(150, 182, 205, 0.16)";
+        ctx.lineWidth = Math.max(0.45, (active ? 1.55 : 1.1) * zoom);
+        diagnostics.recordStyle(active ? "active-main" : "inactive-main");
+        const strokeStarted = diagnostics.startStage();
+        ctx.stroke();
+        diagnostics.recordStroke(descriptor);
+        diagnostics.endStage("strokeMs", strokeStarted, descriptor);
+
+        if (active && link.lastEnergy > 0.02) {
+          const activePathStarted = diagnostics.startStage();
+          ctx.beginPath();
+          appendOrganicPath(points);
+          diagnostics.recordPath(descriptor, generatedSegments + 2);
+          diagnostics.endStage("buildPathMs", activePathStarted, descriptor);
+          ctx.strokeStyle = "rgba(235, 245, 252, 0.05)";
+          ctx.lineWidth = Math.max(1, 4 * zoom);
+          diagnostics.recordStyle("active-glow");
+          const activeStrokeStarted = diagnostics.startStage();
+          ctx.stroke();
+          diagnostics.recordStroke(descriptor);
+          diagnostics.endStage("strokeMs", activeStrokeStarted, descriptor);
+        }
+      }
+
+      if (uniformBatch && resolvedLinks > 0) {
+        ctx.strokeStyle = "rgba(150, 182, 205, 0.16)";
+        ctx.lineWidth = Math.max(0.45, 1.1 * zoom);
+        diagnostics.recordStyle("uniform-batch");
+        const strokeStarted = diagnostics.startStage();
+        ctx.stroke();
+        diagnostics.recordStroke();
+        diagnostics.endStage("strokeMs", strokeStarted);
+      }
+    }
+
+    function prepareRenderItems(linkDiagnostics = null) {
+      if (!renderCullingEnabled) {
+        lastRenderCullingMetrics = {
+          mode: "baseline",
+          totalNodes: nodes.length,
+          totalLinks: links.length,
+          consideredNodes: nodes.length,
+          consideredLinks: links.length,
+          drawnNodes: nodes.length,
+          drawnLinks: links.length,
+          boundingBoxLinks: links.length,
+          segmentRejectedLinks: 0,
+          linkCullingMode: "disabled"
+        };
+        return { renderNodes: nodes, renderLinks: links };
+      }
+
+      const result = collectVisibleRenderItems({
+        nodes,
+        links,
+        nodesById,
+        camera,
+        width,
+        height,
+        selectedNodeId,
+        visibleNodes: visibleRenderNodes,
+        visibleLinks: visibleRenderLinks,
+        linkDiagnostics,
+        linkSegmentCulling: linkSegmentCullingEnabled
+      });
+      lastRenderCullingMetrics = {
+        mode: "culled",
+        ...result.metrics
+      };
+      return {
+        renderNodes: result.visibleNodes,
+        renderLinks: result.visibleLinks
+      };
     }
 
     function smoothNoise2D(x, y, seed) {
@@ -4602,6 +5072,7 @@
     }
 
     function drawCenterStarWebGLNode(node, x, y, selected, time, radiusScale = 1) {
+      if (centerStarWebGLDisabled) return null;
       ensureCenterStarWebGL();
 
       if (centerStarWebGL.status !== "ready") {
@@ -5901,22 +6372,94 @@
       }
       lastRenderTimestamp = time;
 
-      ctx.clearRect(0, 0, width, height);
-      drawBackground(time);
-      updateNodes();
-      drawLinks();
-
-      for (const node of nodes) {
-        drawNode(node, time);
+      const profileReadyFrame = startupFirstReadyFramePending && !startupProfileCompleted;
+      const endReadyFrame = profileReadyFrame
+        ? startupProfiler.start("presentation.firstReadyFrame.total", { activeNodeCount: nodes.length })
+        : null;
+      if (!profileReadyFrame) {
+        ctx.clearRect(0, 0, width, height);
+        drawBackground(time);
+        updateNodes();
+        const renderItems = prepareRenderItems();
+        drawLinks(renderItems.renderLinks);
+        for (const node of renderItems.renderNodes) {
+          drawNode(node, time);
+        }
+        if (editingNodeId && !mapsOverlayOpen) positionEditor();
+        else if (!mapsOverlayOpen) updateSelectedNoteCard();
+        else hideNoteCard();
+        updateAdjacentNoteCards();
+        if (mapsOverlayOpen) drawConstellation(time);
+        else mapsCtx.clearRect(0, 0, width, height);
+      } else {
+        startupProfiler.mark("presentation.firstReadyFrameStart");
+        const linkDiagnostics = linkRenderDiagnosticsEnabled
+          ? linkRenderDiagnosticsModule.createLinkRenderDiagnostics({ width, height, zoom: camera.zoom })
+          : null;
+        const linkCostDiagnostics = linkCostDiagnosticsEnabled
+          ? linkCostDiagnosticsModule.createLinkCostDiagnostics({ mode: linkCostDiagnosticsMode })
+          : null;
+        measureStartupSync(startupProfiler, "presentation.firstReadyFrame.background", () => {
+          ctx.clearRect(0, 0, width, height);
+          drawBackground(time);
+        });
+        measureStartupSync(startupProfiler, "presentation.firstReadyFrame.updateNodes", () => updateNodes());
+        const renderItems = measureStartupSync(
+          startupProfiler,
+          "presentation.firstReadyFrame.classifyVisible",
+          () => prepareRenderItems(linkDiagnostics)
+        );
+        if (linkCostDiagnostics) {
+          const endDrawLinks = startupProfiler.start("presentation.firstReadyFrame.drawLinks");
+          drawLinksCostDiagnosed(renderItems.renderLinks, linkCostDiagnostics);
+          const totalDrawLinksMs = endDrawLinks();
+          lastLinkCostDiagnostics = linkCostDiagnostics.snapshot(totalDrawLinksMs);
+        } else if (linkDiagnostics) {
+          const endDrawLinks = startupProfiler.start("presentation.firstReadyFrame.drawLinks");
+          drawLinksDiagnosed(renderItems.renderLinks, linkDiagnostics);
+          const totalDrawLinksMs = endDrawLinks();
+          lastLinkRenderDiagnostics = linkDiagnostics.snapshot(totalDrawLinksMs);
+        } else {
+          measureStartupSync(
+            startupProfiler,
+            "presentation.firstReadyFrame.drawLinks",
+            () => drawLinks(renderItems.renderLinks)
+          );
+        }
+        measureStartupSync(startupProfiler, "presentation.firstReadyFrame.drawNodes", () => {
+          for (const node of renderItems.renderNodes) {
+            drawNode(node, time);
+          }
+        });
+        measureStartupSync(startupProfiler, "presentation.firstReadyFrame.panels", () => {
+          if (editingNodeId && !mapsOverlayOpen) positionEditor();
+          else if (!mapsOverlayOpen) updateSelectedNoteCard();
+          else hideNoteCard();
+          updateAdjacentNoteCards();
+        });
+        measureStartupSync(startupProfiler, "presentation.firstReadyFrame.constellation", () => {
+          if (mapsOverlayOpen) drawConstellation(time);
+          else mapsCtx.clearRect(0, 0, width, height);
+        });
+        startupFirstReadyFramePending = false;
+        endReadyFrame();
+        startupProfiler.mark("presentation.firstReadyFrameComplete");
+        requestAnimationFrame(() => {
+          startupProfiler.mark("presentation.uiUsable");
+          startupProfiler.setContext({
+            renderCulling: lastRenderCullingMetrics,
+            linkRender: lastLinkRenderDiagnostics,
+            linkCost: lastLinkCostDiagnostics
+          });
+          startupProfileCompleted = true;
+          const report = startupProfiler.complete();
+          window.__contextusStartupProfile = report;
+          window.dispatchEvent(new CustomEvent("contextus-startup-profile", { detail: report }));
+          if (window.parent !== window) {
+            window.parent.postMessage({ type: "contextus-startup-profile", report }, location.origin);
+          }
+        });
       }
-
-      if (editingNodeId && !mapsOverlayOpen) positionEditor();
-      else if (!mapsOverlayOpen) updateSelectedNoteCard();
-      else hideNoteCard();
-      updateAdjacentNoteCards();
-
-      if (mapsOverlayOpen) drawConstellation(time);
-      else mapsCtx.clearRect(0, 0, width, height);
       renderFrameId = requestAnimationFrame(render);
     }
 
@@ -5998,26 +6541,32 @@
     }
 
     function restoreWorkspace(restoredMaps, nextActiveMapId, nextMapIdCounter, nextMapsViewState = null, shouldResave = false) {
-      maps = restoredMaps;
-      invalidateConstellationVisualCaches();
-      mapIdCounter = Math.max(nextMapIdCounter, ...maps.map(map => map.id));
-      activeMapId = maps.some(map => map.id === nextActiveMapId) ? nextActiveMapId : maps[0].id;
+      return measureStartupSync(startupProfiler, "hydration.restoreWorkspace.total", () => {
+        maps = restoredMaps;
+        invalidateConstellationVisualCaches();
+        mapIdCounter = Math.max(nextMapIdCounter, ...maps.map(map => map.id));
+        activeMapId = maps.some(map => map.id === nextActiveMapId) ? nextActiveMapId : maps[0].id;
 
-      applyMapState(getActiveMap());
-      applyMapsViewState(nextMapsViewState);
-      updateMapsButton();
+        applyMapState(getActiveMap());
+        applyMapsViewState(nextMapsViewState);
+        updateMapsButton();
 
-      if (shouldResave) {
-        saveState(false);
-      }
+        if (shouldResave) {
+          saveState(false);
+        }
 
-      return true;
+        return true;
+      }, { mapCount: restoredMaps.length });
     }
 
     function saveState(syncActiveMap = true) {
       try {
         const state = captureWorkspaceState(syncActiveMap);
-        return saveLocalSnapshot(state).catch((error) => {
+        return (async () => {
+          await ensureSyncEngineHasWorkspace(state);
+          const deviceState = captureDeviceSnapshot(state, currentDeviceSnapshot);
+          currentDeviceSnapshot = await localSyncEngine.saveDeviceState(deviceState);
+        })().catch((error) => {
           console.error("No se pudo guardar el estado local:", error);
         });
       } catch (error) {
@@ -6255,6 +6804,9 @@
 
       if (!mainTouchMoved) {
         handleMainTouchTap(point);
+        commitLocalTransaction("updateViewFrame", createViewFramePayload("mainCanvasTouchTap"), {
+          syncActiveMap: true
+        });
       } else if (draggedNodeId) {
         commitDraggedMainNodeMove();
       } else if (panning) {
@@ -7126,7 +7678,7 @@
       });
     }
 
-    registerServiceWorker();
+    if (!startupProfilingEnabled) registerServiceWorker();
     resize();
     startRenderLoop();
   </script>

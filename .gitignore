@@ -3,3 +3,8 @@
 
 # Isolated visual and interaction laboratories
 /experiments/
+
+# Generated performance artifacts. Conclusions stay in observations.md.
+/performance/results/tmp/
+/performance/results/*.log
+/performance/results/*.json
