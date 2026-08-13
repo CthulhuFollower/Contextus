@@ -1,6 +1,6 @@
-const CACHE_NAME = "contextus-app-shell-v29-perf-010b1-link-segment-culling";
+const CACHE_NAME = "contextus-app-shell-v30-perf-010b2b-spatial-links";
 const RELEASE = {
-  version: "2026.06.11-local-sync-perf-010b1-r1",
+  version: "2026.08.11-local-sync-perf-010b2b-r1",
   priority: "critical"
 };
 const APP_ENTRY = "./";
@@ -19,6 +19,7 @@ const APP_SHELL = [
   "./runtime/transaction-persistence.js",
   "./runtime/startup-profiler.js",
   "./runtime/render-culling.js",
+  "./runtime/link-adaptive-geometry.js",
   "./sync/workspace-model.js",
   "./sync/device-patches.js",
   "./sync/merge-engine.js",

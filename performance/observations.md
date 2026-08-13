@@ -1210,12 +1210,12 @@ Valores p50; los p95 completos permanecen en el resultado crudo.
 - Verificacion:
   - Pruebas cubren falsos positivos de bounding box, cruces con extremos fuera,
     velocidades, seis niveles de zoom y 4,500 curvas deterministicas.
-  - El margen se deriva de los limites de la curva organica actual y conserva
-    margen visual adicional.
+  - El margen conserva la curva espacial B2B porque su desviacion maxima actual
+    es 12 px y queda dentro del margen segmentario.
   - Suite completa y recarga PWA offline verificadas con B1 activo.
 - Riesgos o preguntas pendientes:
-  - B1 depende del limite actual de curvatura. Si cambia `organicPointOnLink`,
-    debe actualizarse y volver a validarse el margen.
+  - B1 depende del limite actual de curvatura de `spatial-quad`. Si cambian las
+    constantes de bend, debe actualizarse y volver a validarse el margen.
   - Zoom lejano continua cerca de un segundo porque todos los enlaces son
     visibles; corresponde a PERF-010B2, no a un rechazo mas agresivo.
 
@@ -1316,6 +1316,122 @@ atribucion relativa dentro de B2A.
     relativas, no reemplazar con ellos los tiempos productivos de B1.
   - Medir compositor requiere un laboratorio distinto o trazas del navegador.
 
+## PERF-010B2B: Geometria Adaptativa De Enlaces
+
+- Fecha: 2026-07-01
+- Aceptacion visual/productiva: 2026-08-11
+- Estado: aceptado como cambio productivo. `spatial-quad` reemplaza la
+  geometria organica segmentada en la ruta normal de D0.
+- Hipotesis:
+  - Una curva espacial estable con una sola Bezier cuadratica puede reemplazar
+    la geometria organica actual de 18-42 segmentos, mejorando apariencia y
+    reduciendo segmentos, comandos y costo de dibujo.
+- Alcance propuesto:
+  - Comparar `current` contra `spatial-quad`.
+  - Mantener la ruta productiva normal intacta durante el diagnostico.
+  - Medir escenarios estatico, movimiento medio y movimiento alto.
+  - Activar cambios productivos solo despues de resultados y validacion visual.
+  - No mezclar batching, indice espacial ni render progresivo.
+- Algoritmos propuestos:
+  - `current`: por cada enlace visible, resolver extremos, calcular
+    `S = clamp(floor(distancia / 10), 18, 42)`, generar `S + 1` puntos con
+    `organicPointOnLink()`, construir una polilinea suavizada con muchos
+    `quadraticCurveTo()` y hacer `stroke()` por enlace. Complejidad temporal:
+    `O(L * S)`. Memoria temporal: `O(S)` por enlace.
+  - `spatial-quad`: por cada enlace visible, resolver extremos, calcular
+    tangente y normal, elegir una curvatura estable por identidad
+    `(from, to)`, crear un punto de control cerca del centro y dibujar una sola
+    Bezier cuadratica. La velocidad del nodo no deforma la geometria; la
+    animacion queda reservada para brillo/opacidad. Complejidad temporal:
+    `O(L)`. Memoria temporal: `O(1)` por enlace.
+- Metricas propuestas:
+  - Enlaces dibujados.
+  - Segmentos generados.
+  - Segmentos y comandos ahorrados.
+  - `drawLinks` p50/p95.
+  - Frame completo.
+  - Desviacion visual de la curva espacial.
+  - Fidelidad visual.
+- Criterios propuestos:
+  - Mejora medible en segmentos, comandos y `drawLinks`.
+  - Animacion visualmente mas limpia al mover nodos.
+  - Sin perdida de legibilidad de relaciones padre-hijo.
+  - Produccion solo despues de cerrar resultados, interpretacion y decision.
+- Codigo local:
+  - `runtime/link-adaptive-geometry.js`.
+  - `runtime/link-adaptive-diagnostics.js`.
+  - `performance/perf-010b2b-browser.html`.
+  - `performance/perf-010b2b-browser.js`.
+  - `performance/perf-010b2b-core.js`.
+- Datos y entorno:
+  - Navegador: Edge headless via DevTools Protocol.
+  - Fixture: 50,000 nodos; camaras normal, densa y zoom lejano.
+  - Movimiento: `none`, `medium`, `high`.
+  - Muestras: 3 por combinacion.
+  - Resultado crudo: `performance/results/perf-010b2b-browser.json`.
+
+### Resultados B2B
+
+Valores p50. Los tiempos absolutos pertenecen a esta corrida headless y no deben
+compararse directamente contra B2A; la comparacion valida es `current` contra
+`spatial-quad` dentro de la misma corrida.
+
+| Camara | Movimiento | Enlaces | Draw actual | Draw spatial | Mejora draw | Frame actual | Frame spatial | Mejora frame |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Normal | none | 8,340 | 57.8 ms | 19.0 ms | 67.1% | 203.8 ms | 165.0 ms | 19.0% |
+| Normal | medium | 8,383 | 54.0 ms | 20.1 ms | 62.8% | 208.3 ms | 174.0 ms | 16.5% |
+| Normal | high | 8,536 | 54.4 ms | 20.1 ms | 63.1% | 208.0 ms | 185.5 ms | 10.8% |
+| Densa | none | 28,594 | 564.1 ms | 336.0 ms | 40.4% | 718.5 ms | 506.4 ms | 29.5% |
+| Densa | medium | 28,799 | 537.1 ms | 326.5 ms | 39.2% | 691.2 ms | 485.0 ms | 29.8% |
+| Densa | high | 29,682 | 531.5 ms | 320.6 ms | 39.7% | 690.7 ms | 481.3 ms | 30.3% |
+| Zoom lejano | none | 49,999 | 426.7 ms | 187.2 ms | 56.1% | 899.2 ms | 638.6 ms | 29.0% |
+| Zoom lejano | medium | 49,999 | 433.4 ms | 184.9 ms | 57.3% | 913.5 ms | 661.5 ms | 27.6% |
+| Zoom lejano | high | 49,999 | 434.0 ms | 193.2 ms | 55.5% | 923.7 ms | 657.6 ms | 28.8% |
+
+| Camara | Movimiento | Segmentos actual | Segmentos spatial | Comandos actual | Comandos spatial | Desv. spatial p95/max |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Normal | none | 350,272 | 8,340 | 366,952 | 25,020 | 12.0/12.0 px |
+| Normal | medium | 352,078 | 8,383 | 368,844 | 25,149 | 12.0/12.0 px |
+| Normal | high | 358,504 | 8,536 | 375,576 | 25,608 | 12.0/12.0 px |
+| Densa | none | 1,192,222 | 28,594 | 1,249,410 | 85,782 | 12.0/12.0 px |
+| Densa | medium | 1,200,738 | 28,799 | 1,258,380 | 86,400 | 12.0/12.0 px |
+| Densa | high | 1,237,404 | 29,682 | 1,296,812 | 89,049 | 12.0/12.0 px |
+| Zoom lejano | none | 1,705,541 | 49,999 | 1,805,539 | 149,997 | 12.0/12.0 px |
+| Zoom lejano | medium | 1,705,541 | 49,999 | 1,805,583 | 150,000 | 12.0/12.0 px |
+| Zoom lejano | high | 1,705,541 | 49,999 | 1,805,583 | 150,000 | 12.0/12.0 px |
+
+### Interpretacion B2B
+
+- `spatial-quad` reduce segmentos alrededor de 97-98% porque cada enlace pasa a
+  una sola curva cuadratica.
+- `drawLinks` mejora entre 39.2% y 67.1% p50 en las nueve combinaciones medidas.
+- El frame completo mejora entre 10.8% y 30.3% p50.
+- El costo de generar geometria baja de 27.8-135.2 ms a 2.6-11.8 ms p50.
+- En camara densa y zoom lejano `stroke()` sigue siendo alto; esto confirma que
+  batching por estilo podria seguir siendo util despues, pero no debe mezclarse
+  con B2B.
+- La desviacion visual maxima de la curva espacial queda acotada a 12 px por el
+  algoritmo actual de bend. La validacion visual manual aprobo el arco frente a
+  la geometria anterior.
+
+### Decision B2B
+
+- Decision productiva: aceptar `spatial-quad` como renderer de enlaces D0 por
+  defecto.
+- La geometria anterior de 18-42 segmentos queda retirada de la ruta normal.
+- Mantener B1 activo; su margen conserva la desviacion maxima actual de
+  `spatial-quad`.
+- El siguiente cuello de botella probable es `stroke()` en camara densa y zoom
+  lejano. Debe tratarse como otro experimento, sin mezclarlo con B2B.
+
+### Verificacion B2B
+
+- Suite completa: 106 pruebas aprobadas.
+- PWA/offline verificada el 2026-08-12 con perfil limpio de Edge.
+- Cache activo: `contextus-app-shell-v30-perf-010b2b-spatial-links`.
+- `runtime/link-adaptive-geometry.js` cacheado y recarga offline sin errores de
+  consola.
+
 ## Proximos Experimentos Registrados
 
 ### PERF-008B: Checkpoint Privado Fuera De Interaccion
@@ -1333,12 +1449,12 @@ atribucion relativa dentro de B2A.
 - Restriccion: demostrar que actualizar/consultar el indice cuesta menos que
   recorrer el mapa y conservar exactamente las reglas conservadoras de A1.
 
-### PERF-010B2B: Geometria Adaptativa De Enlaces
+### PERF-010B2C: Agrupacion De Stroke En Enlaces
 
-- Objetivo: usar una primitiva mas simple cuando el error visual y la curvatura
-  sean bajos, reduciendo puntos, comandos y complejidad de `stroke()`.
-- Restriccion: conservar la curva actual como fallback, validar movimiento y
-  fidelidad visual, y no mezclar batching ni render progresivo.
+- Objetivo: reducir el costo restante de `stroke()` cuando hay muchos enlaces
+  visibles en camara densa y zoom lejano.
+- Restriccion: no cambiar la geometria `spatial-quad` aceptada ni mezclar indice
+  espacial o render progresivo.
 
 ### PERF-011: Borrados Grandes Y Tombstones Compactos
 

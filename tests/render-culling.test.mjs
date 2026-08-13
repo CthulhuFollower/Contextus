@@ -15,6 +15,9 @@ import { rebuildNodesById } from "../runtime/node-index.js";
 import {
   polylineIntersectsViewport
 } from "../runtime/link-render-diagnostics.js";
+import {
+  createSpatialQuadraticLink
+} from "../runtime/link-adaptive-geometry.js";
 
 const camera = { x: 500, y: 300, zoom: 1 };
 const viewport = createScreenViewport(1_000, 600);
@@ -40,44 +43,31 @@ function boundsIntersect(bounds, targetViewport) {
   );
 }
 
-function normalize(x, y) {
-  const length = Math.hypot(x, y) || 1;
-  return { x: x / length, y: y / length, len: length };
-}
-
-function organicPoints(aNode, bNode, testCamera, segments = 42) {
+function spatialQuadraticPoints(aNode, bNode, testCamera, samples = 42) {
   const zoom = testCamera.zoom;
-  const a = {
+  const geometry = createSpatialQuadraticLink({
     x: aNode.renderX * zoom + testCamera.x,
-    y: aNode.renderY * zoom + testCamera.y,
-    vx: aNode.vx * zoom,
-    vy: aNode.vy * zoom
-  };
-  const b = {
+    y: aNode.renderY * zoom + testCamera.y
+  }, {
     x: bNode.renderX * zoom + testCamera.x,
-    y: bNode.renderY * zoom + testCamera.y,
-    vx: bNode.vx * zoom,
-    vy: bNode.vy * zoom
-  };
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const tangent = normalize(dx, dy);
-  const normal = normalize(-dy, dx);
+    y: bNode.renderY * zoom + testCamera.y
+  }, {
+    from: aNode.id,
+    to: bNode.id
+  });
   const points = [];
-  for (let index = 0; index <= segments; index += 1) {
-    const t = index / segments;
-    const envelope = Math.pow(Math.sin(Math.PI * t), 1.2);
-    const normalEnergy =
-      (a.vx * normal.x + a.vy * normal.y) * (1 - t) +
-      (b.vx * normal.x + b.vy * normal.y) * t;
-    const tangEnergy =
-      (a.vx * tangent.x + a.vy * tangent.y) * (1 - t) +
-      (b.vx * tangent.x + b.vy * tangent.y) * t;
-    const offsetNormal = normalEnergy * envelope * Math.min(18, tangent.len * 0.08);
-    const offsetTang = tangEnergy * envelope * Math.min(6, tangent.len * 0.02);
+  for (let index = 0; index <= samples; index += 1) {
+    const t = index / samples;
+    const inv = 1 - t;
     points.push({
-      x: a.x + dx * t + normal.x * offsetNormal + tangent.x * offsetTang,
-      y: a.y + dy * t + normal.y * offsetNormal + tangent.y * offsetTang
+      x:
+        inv * inv * geometry.startX +
+        2 * inv * t * geometry.controlX +
+        t * t * geometry.endX,
+      y:
+        inv * inv * geometry.startY +
+        2 * inv * t * geometry.controlY +
+        t * t * geometry.endY
     });
   }
   return points;
@@ -163,7 +153,7 @@ test("segment culling rejects bounding-box false positives while retaining cross
   assert.equal(isLinkSegmentPotentiallyVisible(crossingA, crossingB, originCamera, originViewport), true);
 });
 
-test("segment margin conservatively retains sampled organic curves", () => {
+test("segment margin conservatively retains sampled spatial quadratic curves", () => {
   const pairs = [
     [node(1, -1_000, 0, { vx: 8, vy: -5 }), node(2, 1_000, 0, { vx: -6, vy: 9 })],
     [node(3, -900, 500, { vx: 12, vy: 12 }), node(4, 600, -900, { vx: -10, vy: 7 })],
@@ -174,7 +164,7 @@ test("segment margin conservatively retains sampled organic curves", () => {
     for (const [aNode, bNode] of pairs) {
       assert.ok(getConservativeLinkSegmentMargin(aNode, bNode, testCamera) >= 12);
       const curveVisible = polylineIntersectsViewport(
-        organicPoints(aNode, bNode, testCamera),
+        spatialQuadraticPoints(aNode, bNode, testCamera),
         viewport
       );
       if (curveVisible) {
@@ -187,7 +177,7 @@ test("segment margin conservatively retains sampled organic curves", () => {
   }
 });
 
-test("segment culling has no sampled false negatives across deterministic curves", () => {
+test("segment culling has no sampled false negatives across deterministic spatial curves", () => {
   let seed = 0x10b1;
   const random = () => {
     seed = (seed * 1664525 + 1013904223) >>> 0;
@@ -205,7 +195,7 @@ test("segment culling has no sampled false negatives across deterministic curves
         vy: random() * 40 - 20
       });
       const curveVisible = polylineIntersectsViewport(
-        organicPoints(aNode, bNode, testCamera),
+        spatialQuadraticPoints(aNode, bNode, testCamera),
         viewport
       );
       if (curveVisible) {

@@ -814,6 +814,11 @@
       measureStartupSync
     } from "./runtime/startup-profiler.js";
     import { collectVisibleRenderItems } from "./runtime/render-culling.js";
+    import {
+      SPATIAL_QUADRATIC_COMMANDS,
+      createSpatialQuadraticLink,
+      currentLinkSegments
+    } from "./runtime/link-adaptive-geometry.js";
 
     const startupSearchParams = new URLSearchParams(location.search);
     const startupProfilingEnabled = startupSearchParams.get("perfStartup") === "1";
@@ -825,13 +830,23 @@
       startupProfilingEnabled && startupSearchParams.get("perfLinkDiagnostics") === "1";
     const linkCostDiagnosticsEnabled =
       startupProfilingEnabled && startupSearchParams.get("perfLinkCostDiagnostics") === "1";
+    const linkAdaptiveDiagnosticsEnabled =
+      startupProfilingEnabled && startupSearchParams.get("perfLinkAdaptiveDiagnostics") === "1";
     const linkRenderDiagnosticsModule = linkRenderDiagnosticsEnabled
       ? await import("./runtime/link-render-diagnostics.js")
       : null;
     const linkCostDiagnosticsModule = linkCostDiagnosticsEnabled
       ? await import("./runtime/link-cost-diagnostics.js")
       : null;
+    const linkAdaptiveDiagnosticsModule = linkAdaptiveDiagnosticsEnabled
+      ? await import("./runtime/link-adaptive-diagnostics.js")
+      : null;
     const linkCostDiagnosticsMode = startupSearchParams.get("perfLinkCostMode") || "current";
+    const linkAdaptiveDiagnosticsMode = "spatial-quad";
+    const linkAdaptiveVelocityFixture =
+      linkAdaptiveDiagnosticsEnabled
+        ? startupSearchParams.get("perfLinkAdaptiveVelocityFixture") || "none"
+        : "none";
     const startupProfiler = createStartupProfiler({
       enabled: startupProfilingEnabled,
       startedAt: 0,
@@ -844,6 +859,8 @@
         centerStarRenderer: centerStarWebGLDisabled ? "canvas-fallback" : "webgl",
         linkRenderDiagnostics: linkRenderDiagnosticsEnabled,
         linkCostDiagnostics: linkCostDiagnosticsEnabled ? linkCostDiagnosticsMode : false,
+        linkAdaptiveDiagnostics: linkAdaptiveDiagnosticsEnabled ? linkAdaptiveDiagnosticsMode : false,
+        linkAdaptiveVelocityFixture,
         navigationType: performance.getEntriesByType("navigation")[0]?.type || null
       }
     });
@@ -901,6 +918,7 @@
     let lastRenderCullingMetrics = null;
     let lastLinkRenderDiagnostics = null;
     let lastLinkCostDiagnostics = null;
+    let lastLinkAdaptiveDiagnostics = null;
     let maps = [];
     let activeMapId = null;
     let mapIdCounter = 0;
@@ -4237,6 +4255,7 @@
       }
     }
 
+    // Legacy PERF-010B0/B2A diagnostics only; drawLinks() uses spatial-quad.
     function organicPointOnLink(a, b, t) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
@@ -4266,6 +4285,11 @@
       };
     }
 
+    function appendSpatialLinkPath(geometry) {
+      ctx.moveTo(geometry.startX, geometry.startY);
+      ctx.quadraticCurveTo(geometry.controlX, geometry.controlY, geometry.endX, geometry.endY);
+    }
+
     function drawLinks(renderLinks = links) {
       const zoom = camera.zoom;
       for (const link of renderLinks) {
@@ -4275,48 +4299,30 @@
 
         const aPoint = projectWorldPoint(aNode.renderX, aNode.renderY);
         const bPoint = projectWorldPoint(bNode.renderX, bNode.renderY);
-        const a = { x: aPoint.x, y: aPoint.y, vx: aNode.vx * zoom, vy: aNode.vy * zoom };
-        const b = { x: bPoint.x, y: bPoint.y, vx: bNode.vx * zoom, vy: bNode.vy * zoom };
+        const a = { x: aPoint.x, y: aPoint.y };
+        const b = { x: bPoint.x, y: bPoint.y };
 
         const active = aNode.id === selectedNodeId || bNode.id === selectedNodeId;
 
         const totalEnergy =
-          Math.abs(a.vx) + Math.abs(a.vy) + Math.abs(b.vx) + Math.abs(b.vy);
+          (Math.abs(aNode.vx) + Math.abs(aNode.vy) + Math.abs(bNode.vx) + Math.abs(bNode.vy)) * zoom;
 
         link.lastEnergy = link.lastEnergy * 0.85 + totalEnergy * 0.15;
 
-        const dist = Math.hypot(b.x - a.x, b.y - a.y);
-        const segments = Math.max(18, Math.min(42, Math.floor(dist / 10)));
-
-        const points = [];
-        for (let i = 0; i <= segments; i++) {
-          const t = i / segments;
-          points.push(organicPointOnLink(a, b, t));
-        }
+        const geometry = createSpatialQuadraticLink(a, b, {
+          from: link.from,
+          to: link.to
+        });
 
         ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-
-        for (let i = 1; i < points.length - 1; i++) {
-          const mx = (points[i].x + points[i + 1].x) * 0.5;
-          const my = (points[i].y + points[i + 1].y) * 0.5;
-          ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
-        }
-
-        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+        appendSpatialLinkPath(geometry);
         ctx.strokeStyle = active ? "rgba(218, 235, 248, 0.42)" : "rgba(150, 182, 205, 0.16)";
         ctx.lineWidth = Math.max(0.45, (active ? 1.55 : 1.1) * zoom);
         ctx.stroke();
 
         if (link.lastEnergy > 0.02 && active) {
           ctx.beginPath();
-          ctx.moveTo(points[0].x, points[0].y);
-          for (let i = 1; i < points.length - 1; i++) {
-            const mx = (points[i].x + points[i + 1].x) * 0.5;
-            const my = (points[i].y + points[i + 1].y) * 0.5;
-            ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
-          }
-          ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+          appendSpatialLinkPath(geometry);
           ctx.strokeStyle = "rgba(235, 245, 252, 0.05)";
           ctx.lineWidth = Math.max(1, 4 * zoom);
           ctx.stroke();
@@ -4541,6 +4547,88 @@
         ctx.stroke();
         diagnostics.recordStroke();
         diagnostics.endStage("strokeMs", strokeStarted);
+      }
+    }
+
+    function drawLinksAdaptiveDiagnosed(renderLinks, diagnostics) {
+      const zoom = camera.zoom;
+
+      for (const link of renderLinks) {
+        const resolveStarted = diagnostics.startStage();
+        const aNode = getNodeById(link.from);
+        const bNode = getNodeById(link.to);
+        if (!aNode || !bNode) {
+          diagnostics.endStage("resolveEndpointsMs", resolveStarted);
+          diagnostics.recordMissingEndpoint();
+          continue;
+        }
+
+        const aPoint = projectWorldPoint(aNode.renderX, aNode.renderY);
+        const bPoint = projectWorldPoint(bNode.renderX, bNode.renderY);
+        const a = { x: aPoint.x, y: aPoint.y, vx: aNode.vx * zoom, vy: aNode.vy * zoom };
+        const b = { x: bPoint.x, y: bPoint.y, vx: bNode.vx * zoom, vy: bNode.vy * zoom };
+        const active = aNode.id === selectedNodeId || bNode.id === selectedNodeId;
+        const totalEnergy =
+          Math.abs(a.vx) + Math.abs(a.vy) + Math.abs(b.vx) + Math.abs(b.vy);
+        link.lastEnergy = link.lastEnergy * 0.85 + totalEnergy * 0.15;
+
+        const lengthPx = Math.hypot(b.x - a.x, b.y - a.y);
+        const originalSegments = currentLinkSegments(lengthPx);
+        const descriptor = diagnostics.recordResolvedLink({ originalSegments, active });
+        diagnostics.endStage("resolveEndpointsMs", resolveStarted);
+
+        const geometryStarted = diagnostics.startStage();
+        const spatialGeometry = createSpatialQuadraticLink(a, b, {
+          from: link.from,
+          to: link.to
+        });
+        diagnostics.recordSpatialQuadraticGeometry(descriptor, spatialGeometry);
+        diagnostics.endStage("generateGeometryMs", geometryStarted);
+
+        const pathStarted = diagnostics.startStage();
+        ctx.beginPath();
+        appendSpatialLinkPath(spatialGeometry);
+        diagnostics.recordPath(SPATIAL_QUADRATIC_COMMANDS);
+        diagnostics.endStage("buildPathMs", pathStarted);
+
+        ctx.strokeStyle = active ? "rgba(218, 235, 248, 0.42)" : "rgba(150, 182, 205, 0.16)";
+        ctx.lineWidth = Math.max(0.45, (active ? 1.55 : 1.1) * zoom);
+        diagnostics.recordStyle(active ? "active-main" : "inactive-main");
+        const strokeStarted = diagnostics.startStage();
+        ctx.stroke();
+        diagnostics.recordStroke();
+        diagnostics.endStage("strokeMs", strokeStarted);
+
+        if (active && link.lastEnergy > 0.02) {
+          const activePathStarted = diagnostics.startStage();
+          ctx.beginPath();
+          appendSpatialLinkPath(spatialGeometry);
+          diagnostics.recordPath(SPATIAL_QUADRATIC_COMMANDS);
+          diagnostics.endStage("buildPathMs", activePathStarted);
+          ctx.strokeStyle = "rgba(235, 245, 252, 0.05)";
+          ctx.lineWidth = Math.max(1, 4 * zoom);
+          diagnostics.recordStyle("active-glow");
+          const activeStrokeStarted = diagnostics.startStage();
+          ctx.stroke();
+          diagnostics.recordStroke();
+          diagnostics.endStage("strokeMs", activeStrokeStarted);
+        }
+      }
+    }
+
+    function applyLinkAdaptiveVelocityFixture(fixtureName) {
+      if (fixtureName === "none") return;
+      const screenVelocity =
+        fixtureName === "high" ? 0.35 :
+        fixtureName === "medium" ? 0.08 :
+        0;
+      if (screenVelocity <= 0) return;
+      const zoom = camera.zoom || 1;
+      for (const node of nodes) {
+        if (node.isCenter) continue;
+        const angle = node.id * 2.399963229728653;
+        node.vx = Math.cos(angle) * screenVelocity / zoom;
+        node.vy = Math.sin(angle) * screenVelocity / zoom;
       }
     }
 
@@ -6377,11 +6465,27 @@
         ? startupProfiler.start("presentation.firstReadyFrame.total", { activeNodeCount: nodes.length })
         : null;
       if (!profileReadyFrame) {
+        const linkAdaptiveDiagnostics = linkAdaptiveDiagnosticsEnabled
+          ? linkAdaptiveDiagnosticsModule.createLinkAdaptiveDiagnostics({
+              mode: linkAdaptiveDiagnosticsMode
+            })
+          : null;
         ctx.clearRect(0, 0, width, height);
         drawBackground(time);
         updateNodes();
+        if (linkAdaptiveDiagnostics && linkAdaptiveVelocityFixture !== "none") {
+          applyLinkAdaptiveVelocityFixture(linkAdaptiveVelocityFixture);
+        }
         const renderItems = prepareRenderItems();
-        drawLinks(renderItems.renderLinks);
+        if (linkAdaptiveDiagnostics) {
+          const drawLinksStartedAt = performance.now();
+          drawLinksAdaptiveDiagnosed(renderItems.renderLinks, linkAdaptiveDiagnostics);
+          lastLinkAdaptiveDiagnostics = linkAdaptiveDiagnostics.snapshot(
+            performance.now() - drawLinksStartedAt
+          );
+        } else {
+          drawLinks(renderItems.renderLinks);
+        }
         for (const node of renderItems.renderNodes) {
           drawNode(node, time);
         }
@@ -6399,17 +6503,34 @@
         const linkCostDiagnostics = linkCostDiagnosticsEnabled
           ? linkCostDiagnosticsModule.createLinkCostDiagnostics({ mode: linkCostDiagnosticsMode })
           : null;
+        const linkAdaptiveDiagnostics = linkAdaptiveDiagnosticsEnabled
+          ? linkAdaptiveDiagnosticsModule.createLinkAdaptiveDiagnostics({
+              mode: linkAdaptiveDiagnosticsMode
+            })
+          : null;
         measureStartupSync(startupProfiler, "presentation.firstReadyFrame.background", () => {
           ctx.clearRect(0, 0, width, height);
           drawBackground(time);
         });
         measureStartupSync(startupProfiler, "presentation.firstReadyFrame.updateNodes", () => updateNodes());
+        if (linkAdaptiveDiagnostics && linkAdaptiveVelocityFixture !== "none") {
+          measureStartupSync(
+            startupProfiler,
+            "presentation.firstReadyFrame.linkVelocityFixture",
+            () => applyLinkAdaptiveVelocityFixture(linkAdaptiveVelocityFixture)
+          );
+        }
         const renderItems = measureStartupSync(
           startupProfiler,
           "presentation.firstReadyFrame.classifyVisible",
           () => prepareRenderItems(linkDiagnostics)
         );
-        if (linkCostDiagnostics) {
+        if (linkAdaptiveDiagnostics) {
+          const endDrawLinks = startupProfiler.start("presentation.firstReadyFrame.drawLinks");
+          drawLinksAdaptiveDiagnosed(renderItems.renderLinks, linkAdaptiveDiagnostics);
+          const totalDrawLinksMs = endDrawLinks();
+          lastLinkAdaptiveDiagnostics = linkAdaptiveDiagnostics.snapshot(totalDrawLinksMs);
+        } else if (linkCostDiagnostics) {
           const endDrawLinks = startupProfiler.start("presentation.firstReadyFrame.drawLinks");
           drawLinksCostDiagnosed(renderItems.renderLinks, linkCostDiagnostics);
           const totalDrawLinksMs = endDrawLinks();
@@ -6449,7 +6570,8 @@
           startupProfiler.setContext({
             renderCulling: lastRenderCullingMetrics,
             linkRender: lastLinkRenderDiagnostics,
-            linkCost: lastLinkCostDiagnostics
+            linkCost: lastLinkCostDiagnostics,
+            linkAdaptive: lastLinkAdaptiveDiagnostics
           });
           startupProfileCompleted = true;
           const report = startupProfiler.complete();

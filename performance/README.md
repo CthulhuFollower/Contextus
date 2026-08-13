@@ -7,8 +7,8 @@ produccion.
 Estado consolidado actual:
 
 ```text
-alcance congelado: PERF-010B2A
-siguiente experimento propuesto: PERF-010B2B, no iniciado
+ultimo experimento aceptado: PERF-010B2B
+PERF-010B2B: renderer espacial de enlaces aceptado y productivo
 ```
 
 Antes de continuar desde una conversacion o sesion nueva:
@@ -375,3 +375,43 @@ Resultados:
 
 - `performance/results/perf-010b2a-browser.json`
 - `performance/results/perf-010b2a-dense-focus-browser.json`
+
+## Ejecutar PERF-010B2B
+
+PERF-010B2B esta aceptado como renderer productivo de enlaces D0. El
+laboratorio queda como regresion diagnostica del modo `spatial-quad`.
+
+Diagnostico de geometria espacial de enlaces con B1 activo:
+
+```powershell
+node performance/perf-server.mjs --port 8792 --output performance/results/perf-010b2b-browser.json
+```
+
+Despues, abrir:
+
+```text
+http://127.0.0.1:8792/performance/perf-010b2b-browser.html?sizes=50000&cameras=normal,dense,zoom-out&velocityFixtures=none,medium,high&modes=spatial-quad&samples=3&report=1
+```
+
+El modo `spatial-quad` dibuja cada enlace con una sola Bezier cuadratica
+estable, con curvatura derivada de la identidad del enlace y no de la velocidad
+del nodo.
+Las fixtures de velocidad existen solo para diagnostico porque las velocidades
+transitorias no se guardan en snapshots.
+
+Algoritmo productivo:
+
+| Modo | Algoritmo | Complejidad |
+| --- | --- | --- |
+| `spatial-quad` | Calcula un punto de control estable y dibuja una Bezier cuadratica. | `O(L)` |
+
+Resultado local esperado:
+
+- `performance/results/perf-010b2b-browser.json`
+
+Estado:
+
+- Resultados: generados en `performance/results/perf-010b2b-browser.json`.
+- Interpretacion: `spatial-quad` reduce fuertemente segmentos, comandos y
+  `drawLinks`.
+- Decision: aceptado tras validacion visual manual y activado por defecto.

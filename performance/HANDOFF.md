@@ -1,22 +1,22 @@
-# Traspaso Tecnico: Baseline Hasta PERF-010B2A
+# Traspaso Tecnico: Baseline Hasta PERF-010B2B
 
 ## Estado Congelado
 
 Este documento describe el baseline aceptado de Contextus al cerrar
-PERF-010B2A. La fase siguiente no debe comenzar hasta consolidar y revisar este
+PERF-010B2B. La fase siguiente no debe comenzar hasta consolidar y revisar este
 baseline.
 
 Alcance congelado:
 
 ```text
-ultimo experimento aceptado: PERF-010B2A
-proxima propuesta: PERF-010B2B
+ultimo experimento aceptado: PERF-010B2B
+PERF-010B2B: aceptado como renderer productivo de enlaces D0
 optimizaciones nuevas durante consolidacion: ninguna
 ```
 
 Objetivo de consolidacion:
 
-> Conservar el estado aceptado hasta PERF-010B2A sin cambiar comportamiento
+> Conservar el estado aceptado hasta PERF-010B2B sin cambiar comportamiento
 > productivo, dejando pruebas, resultados, documentacion y estructura
 > experimental listos para continuar.
 
@@ -53,6 +53,7 @@ Objetivo de consolidacion:
 | Parches privados incrementales y coalescidos | Activos |
 | Culling lineal conservador de nodos/enlaces | Activo |
 | Rechazo segmentario conservador de enlaces B1 | Activo |
+| Geometria espacial O(1) de enlaces B2B | Activa |
 | Instrumentacion PERF-009/B0/B2A | Inactiva por defecto |
 | Ablaciones PERF-010B2A | Solo diagnostico; nunca productivas |
 
@@ -81,7 +82,7 @@ implementacion.
 | PERF-010B0 | Diagnostico inactivo por defecto | `index.html`, `runtime/link-render-diagnostics.js` | `tests/link-render-diagnostics.test.mjs`, `tests/perf-010b0-infrastructure.test.mjs` |
 | PERF-010B1 | Productivo, activo por defecto | `index.html`, `runtime/render-culling.js` | `tests/render-culling.test.mjs`, `tests/perf-010b1-infrastructure.test.mjs` |
 | PERF-010B2A | Diagnostico y ablaciones inactivos por defecto | `index.html`, `runtime/link-cost-diagnostics.js` | `tests/link-cost-diagnostics.test.mjs`, `tests/perf-010b2a-infrastructure.test.mjs` |
-| PERF-010B2B | No implementado | Ninguno | Ninguna |
+| PERF-010B2B | Productivo, activo por defecto | `index.html`, `runtime/link-adaptive-geometry.js`, `service-worker.js` | `tests/link-adaptive-geometry.test.mjs`, `tests/link-adaptive-diagnostics.test.mjs`, `tests/render-culling.test.mjs`, `tests/perf-010b2b-infrastructure.test.mjs` |
 
 Archivos transversales que no pertenecen a un unico PERF:
 
@@ -170,8 +171,9 @@ PERF-010B2A encontro:
 
 1. El culling debe ser conservador: aceptar elementos extra antes que ocultar
    elementos visibles.
-2. B1 depende de los limites actuales de `organicPointOnLink`; si cambia esa
-   geometria, debe revalidarse el margen segmentario.
+2. B1 depende de que la desviacion maxima de `spatial-quad` quede dentro del
+   margen segmentario conservador. Si cambian las constantes de bend, debe
+   revalidarse el margen.
 3. Los flags diagnosticos no deben alterar la ruta normal.
 4. Ninguna ablacion B2A puede activarse como comportamiento productivo sin un
    experimento nuevo y validacion visual.
@@ -192,6 +194,9 @@ Todos viven en query string. Los flags de diagnostico requieren
 | `perfLinkDiagnostics=1` | Activa diagnostico B0. |
 | `perfLinkCostDiagnostics=1` | Activa diagnostico B2A. |
 | `perfLinkCostMode=<mode>` | Selecciona una ablacion B2A no productiva. |
+| `perfLinkAdaptiveDiagnostics=1` | Perfila el renderer espacial B2B productivo. |
+| `perfLinkAdaptiveMode=spatial-quad` | Modo B2B aceptado; `current` ya no es una opcion activa. |
+| `perfLinkAdaptiveVelocityFixture=medium|high` | Aplica velocidad transitoria solo para diagnostico B2B. |
 
 ## Verificacion Requerida
 
@@ -201,13 +206,13 @@ Suite completa:
 node --test tests/*.test.mjs
 ```
 
-Estado al cerrar PERF-010B2A:
+Estado al cerrar PERF-010B2B:
 
 ```text
-98 pruebas aprobadas
-PWA normal verificada
-recarga completamente offline verificada
-errores de consola: ninguno
+106 pruebas aprobadas
+PWA/offline verificada con perfil limpio de Edge
+service worker: contextus-app-shell-v30-perf-010b2b-spatial-links
+errores de consola en recarga offline: ninguno
 ```
 
 Laboratorio de sincronizacion:
@@ -235,29 +240,36 @@ Comandos y URLs de rendimiento viven en `performance/README.md`.
 No iniciar durante consolidacion.
 
 ```text
-PERF-010B2B: Geometria Adaptativa De Enlaces
+PERF-010B2C: Reducir Costo De Stroke En Enlaces Visibles
 ```
 
 Hipotesis:
 
-> Enlaces con error visual y curvatura bajos pueden usar una primitiva mas
-> simple, conservando la curva actual como fallback, para reducir puntos,
-> comandos y complejidad de `stroke()` sin degradacion visual observable.
+> Despues de adoptar `spatial-quad`, el costo restante en camara densa y zoom
+> lejano esta dominado por muchas llamadas a `stroke()`. Agrupar enlaces por
+> estilo podria reducir llamadas de dibujo sin cambiar la geometria aceptada.
 
 Restricciones:
 
-- No mezclar batching, indice espacial ni render progresivo.
-- Incluir fixtures con movimiento y curvatura media/alta.
-- Definir y medir error visual antes de elegir umbrales.
-- Mantener fallback de geometria actual.
+- No cambiar la geometria B2B aceptada.
+- No mezclar indice espacial ni render progresivo.
+- Mantener culling A1/B1 activo.
+- Comparar renderer actual contra batching por estilo en los mismos fixtures.
+
+Estado de trazabilidad:
+
+- B2B ya esta aceptado como renderer productivo.
+- Reporte B2B local generado: `performance/results/perf-010b2b-browser.json`.
+- Cualquier B2C debe empezar como experimento nuevo, con resultados e
+  interpretacion propia antes de activar produccion.
 
 ## Estado Git Para Baseline
 
-El baseline parte de:
+El baseline B2B se cierra en un commit separado sobre esta base:
 
 ```text
 rama: main
-commit previo: a664c0a Bug visual corregido.
+base antes de B2B: 431f850 Document performance baseline through PERF-010B2A
 ```
 
 Antes de continuar desde este baseline:
